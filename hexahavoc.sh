@@ -129,7 +129,7 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
   echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
   echo -e "${BLUE}Do you want to:${RESET}"
   echo -e "  [a] Attach to existing session"
-  echo -e "  [k] Kill existing session and start a new one"
+  echo -e "  [k] Kill existing session"
   read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
 
   case "$user_choice" in
@@ -141,6 +141,8 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
     [kK])
       echo -e "${RED}[*] Killing existing tmux session...${RESET}"
       tmux kill-session -t "$session_name"
+      echo -e "${GREEN}[*] Session killed. Exiting.${RESET}"
+      exit 0
       ;;
     *)
       echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
