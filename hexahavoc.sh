@@ -73,12 +73,6 @@ while getopts ":d:t:i:l:vs" opt; do
   esac
 done
 
-# Ensure required arguments are provided
-if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
-  echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
-  usage
-fi
-
 # Root privilege check
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}Error: This script must be run as root.${RESET}"
@@ -124,38 +118,38 @@ if [ "$silent" -eq 1 ]; then
 fi
 
 # Check if the tmux session already exists
-# If no arguments provided → manage existing session
-if [ "$#" -eq 0 ]; then
-  if tmux has-session -t "$session_name" 2>/dev/null; then
-    echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
-    echo -e "${BLUE}Do you want to:${RESET}"
-    echo -e "  [a] Attach to existing session"
-    echo -e "  [k] Kill existing session"
-    read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
+# Check if tmux session exists
+if tmux has-session -t "$session_name" 2>/dev/null; then
+  echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
 
-    case "$user_choice" in
-      [aA])
-        echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-        tmux -CC attach-session -t "$session_name"
-        exit 0
-        ;;
-      [kK])
-        echo -e "${RED}[*] Killing existing tmux session...${RESET}"
-        tmux kill-session -t "$session_name"
-        echo -e "${GREEN}[*] Session killed.${RESET}"
-        exit 0
-        ;;
-      *)
-        echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
-        exit 1
-        ;;
-    esac
-  else
-    echo -e "${RED}[!] No existing tmux session found.${RESET}"
-    exit 1
-  fi
+  echo -e "${BLUE}Do you want to:${RESET}"
+  echo -e "  [a] Attach to existing session"
+  echo -e "  [k] Kill and restart session"
+  read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
+
+  case "$user_choice" in
+    [aA])
+      echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
+      tmux -CC attach-session -t "$session_name"
+      exit 0
+      ;;
+    [kK])
+      echo -e "${RED}[*] Killing existing tmux session...${RESET}"
+      tmux kill-session -t "$session_name"
+      sleep 1
+      ;;
+    *)
+      echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
+      exit 1
+      ;;
+  esac
 fi
 
+# Ensure required arguments are provided
+if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
+  echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
+  usage
+fi
 
 # Create a new tmux session
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
