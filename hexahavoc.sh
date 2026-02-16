@@ -82,24 +82,6 @@ fi
 # Show the banner
 banner
 
-# Validate target domain
-if ! [[ "$target_domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-  echo -e "${RED}Error: Invalid domain format.${RESET}"
-  exit 1
-fi
-
-# Validate target IP (basic check for IPv4/IPv6)
-if ! [[ "$target_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
-  echo -e "${RED}Error: Invalid IP address format.${RESET}"
-  exit 1
-fi
-
-# Check if target IP is reachable
-ping -c 1 "$target_ip" &>/dev/null || {
-  echo -e "${RED}Error: Target IP is not reachable.${RESET}"
-  exit 1
-}
-
 # Check dependencies
 echo -e "${CYAN}Checking dependencies...${RESET}"
 check_command "tmux"
@@ -150,6 +132,24 @@ if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
   echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
   usage
 fi
+
+# Validate target domain
+if ! [[ "$target_domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+  echo -e "${RED}Error: Invalid domain format.${RESET}"
+  exit 1
+fi
+
+# Validate target IP (basic check for IPv4/IPv6)
+if ! [[ "$target_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
+  echo -e "${RED}Error: Invalid IP address format.${RESET}"
+  exit 1
+fi
+
+# Check if target IP is reachable
+ping -c 1 "$target_ip" &>/dev/null || {
+  echo -e "${RED}Error: Target IP is not reachable.${RESET}"
+  exit 1
+}
 
 # Create a new tmux session
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
