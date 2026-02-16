@@ -82,12 +82,6 @@ fi
 # Show the banner
 banner
 
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-check_command "tmux"
-check_command "mitm6"
-check_command "impacket-ntlmrelayx"
-
 # Enable verbose logging if requested
 if [ "$verbose" -eq 1 ]; then
   echo -e "${YELLOW}Enabling verbose mode...${RESET}"
@@ -118,7 +112,8 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
     [kK])
       echo -e "${RED}[*] Killing existing tmux session...${RESET}"
       tmux kill-session -t "$session_name"
-      sleep 1
+      echo -e "${GREEN}[*] Session killed. Exiting.${RESET}"
+      exit 0
       ;;
     *)
       echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
@@ -126,6 +121,12 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
       ;;
   esac
 fi
+
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+check_command "tmux"
+check_command "mitm6"
+check_command "impacket-ntlmrelayx"
 
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
