@@ -124,31 +124,36 @@ if [ "$silent" -eq 1 ]; then
 fi
 
 # Check if the tmux session already exists
-echo -e "${CYAN}Checking if the tmux session '$session_name' already exists...${RESET}"
-if tmux has-session -t "$session_name" 2>/dev/null; then
-  echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
-  echo -e "${BLUE}Do you want to:${RESET}"
-  echo -e "  [a] Attach to existing session"
-  echo -e "  [k] Kill existing session"
-  read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
+# If no arguments provided → manage existing session
+if [ "$#" -eq 0 ]; then
+  if tmux has-session -t "$session_name" 2>/dev/null; then
+    echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
+    echo -e "${BLUE}Do you want to:${RESET}"
+    echo -e "  [a] Attach to existing session"
+    echo -e "  [k] Kill existing session"
+    read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
 
-  case "$user_choice" in
-    [aA])
-      echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-      tmux -CC attach-session -t "$session_name"
-      exit 0
-      ;;
-    [kK])
-      echo -e "${RED}[*] Killing existing tmux session...${RESET}"
-      tmux kill-session -t "$session_name"
-      echo -e "${GREEN}[*] Session killed. Exiting.${RESET}"
-      exit 0
-      ;;
-    *)
-      echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
-      exit 1
-      ;;
-  esac
+    case "$user_choice" in
+      [aA])
+        echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
+        tmux -CC attach-session -t "$session_name"
+        exit 0
+        ;;
+      [kK])
+        echo -e "${RED}[*] Killing existing tmux session...${RESET}"
+        tmux kill-session -t "$session_name"
+        echo -e "${GREEN}[*] Session killed.${RESET}"
+        exit 0
+        ;;
+      *)
+        echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
+        exit 1
+        ;;
+    esac
+  else
+    echo -e "${RED}[!] No existing tmux session found.${RESET}"
+    exit 1
+  fi
 fi
 
 
