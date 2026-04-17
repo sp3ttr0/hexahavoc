@@ -83,17 +83,16 @@ fi
 banner
 
 # Enable verbose logging if requested
-if [ "$verbose" -eq 1 ]; then
-  echo -e "${YELLOW}Enabling verbose mode...${RESET}"
-  set -x
+if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
+  echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
+  exit 1
 fi
 
 # Suppress console output if silent mode is enabled
 if [ "$silent" -eq 1 ]; then
-  exec > /dev/null 2>&1
+  exec > >(tee -a "$loot_dir/hexahavoc.log") 2>&1
 fi
 
-# Check if the tmux session already exists
 # Check if tmux session exists
 if tmux has-session -t "$session_name" 2>/dev/null; then
   echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
@@ -135,7 +134,7 @@ if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
 fi
 
 # Validate target domain
-if ! [[ "$target_domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+if ! [[ "$target_domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
   echo -e "${RED}Error: Invalid domain format.${RESET}"
   exit 1
 fi
@@ -167,7 +166,7 @@ start_tmux_window() {
 
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
-start_tmux_window "$session_name" "mitm6" "mitm6 -i $interface -d $target_domain" || {
+start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_domain\"" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
