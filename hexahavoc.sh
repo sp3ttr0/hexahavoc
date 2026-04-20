@@ -21,8 +21,15 @@ target_ip=""
 interface="eth0"
 verbose=0
 silent=0
-session_name="ipv6_dns_takeover"
+session_name="ipv6_dns_takeover_$(date +%H%M%S)"
 loot_dir="dumps"
+
+cleanup() {
+  echo -e "${YELLOW}Cleaning up session...${RESET}"
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+}
+
+trap cleanup EXIT
 
 # Check if a command exists
 check_command() {
@@ -74,6 +81,12 @@ while getopts ":d:t:i:l:vs" opt; do
   esac
 done
 
+# Root privilege check
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}Error: This script must be run as root.${RESET}"
+  exit 1
+fi
+
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
   echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
@@ -81,28 +94,24 @@ if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
 fi
 
 # Validate target domain
-if ! [[ "$target_domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
+if ! [ "$target_domain" =~ ^[a-zA-Z0-9.-]+$ ]; then
   echo -e "${RED}Error: Invalid domain format.${RESET}"
   exit 1
 fi
 
 # Validate target IP (basic check for IPv4/IPv6)
-if ! [[ "$target_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
-  echo -e "${RED}Error: Invalid IP address format.${RESET}"
-  exit 1
-fi
+validate_ip() {
+  if ! getent hosts "$1" >/dev/null 2>&1; then
+    echo -e "${RED}Invalid or unresolvable IP${RESET}"
+    exit 1
+  fi
+}
 
 # Check if target IP is reachable
-ping -c 1 "$target_ip" &>/dev/null || {
+ping -c 1 -W 2 "$target_ip" &>/dev/null || {
   echo -e "${RED}Error: Target IP is not reachable.${RESET}"
   exit 1
 }
-
-# Root privilege check
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}Error: This script must be run as root.${RESET}"
-  exit 1
-fi
 
 # Create loot directory if it doesn't exist
 if [ ! -d "$loot_dir" ]; then
@@ -112,8 +121,10 @@ else
 fi
 
 # Suppress console output if silent mode is enabled
+log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
+
 if [ "$silent" -eq 1 ]; then
-  exec > >(tee -a "$loot_dir/hexahavoc.log") 2>&1
+  exec > >(tee -a "$log_file") 2>&1
 fi
 
 # Show the banner
@@ -169,7 +180,7 @@ start_tmux_window() {
   local window_name=$2
   local command=$3
   tmux new-window -t "$session_name" -n "$window_name"
-  tmux send-keys -t "$session_name:$window_name" "$command" C-m
+  tmux send-keys -t "$session_name:$window_name" "bash -lc $(printf '%q' "$command")" C-m
 }
 
 # Start mitm6 in tmux session
