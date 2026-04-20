@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # ===============================================================
 # hexahavoc.sh - IPv6 DNS Takeover Automation Script
@@ -13,6 +14,15 @@ GREEN="\033[32m"
 YELLOW="\033[33m"
 CYAN="\033[36m"
 RESET="\033[0m"
+
+# Initialize variables with default values
+target_domain=""
+target_ip=""
+interface="eth0"
+verbose=0
+silent=0
+session_name="ipv6_dns_takeover"
+loot_dir="dumps"
 
 # Check if a command exists
 check_command() {
@@ -50,15 +60,6 @@ banner() {
   echo -e "                                                                       "
   echo -e "${RESET}"
 }                                                      
-
-# Initialize variables with default values
-target_domain=""
-target_ip=""
-interface="eth0"
-verbose=0
-silent=0
-session_name="ipv6_dns_takeover"
-loot_dir="dumps"
 
 # Parse command-line arguments
 while getopts ":d:t:i:l:vs" opt; do
