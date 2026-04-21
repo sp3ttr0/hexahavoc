@@ -69,17 +69,11 @@ done
 
 # Check if a command exists
 check_command() {
-  if ! command -v "$1" &> /dev/null; then
-    echo -e "${RED}Error: '$1' not found in PATH${RESET}"
+  command -v "$1" >/dev/null || {
+    echo -e "${RED}'$1' not found${RESET}"
     exit 1
-  fi
+  }
 }
-
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-for cmd in tmux mitm6 impacket-ntlmrelayx; do
-  check_command "$cmd"
-done
 
 # Enable verbose logging if requested
 if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
@@ -96,7 +90,7 @@ if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
 fi
 
 # Validate target domain
-if ! [[ "$target_domain" =~^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$ ]]; then
+if ! [[ "$target_domain" =~ ^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$ ]]; then
   echo -e "${RED}Error: Invalid domain format.${RESET}"
   exit 1
 fi
@@ -127,6 +121,12 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+for cmd in tmux mitm6 impacket-ntlmrelayx; do
+  check_command "$cmd"
+done
+
 session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
 log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
@@ -134,10 +134,12 @@ log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 mkdir -p "$loot_dir"
 
 # Suppress console output if silent mode is enabled
+log() { echo -e "$1"; }
+
 if [[ "$silent" -eq 1 ]]; then
   exec >"$log_file" 2>&1
 else
-  log() { echo -e "$1"; }
+  exec > >(tee -a "$log_file") 2>&1
 fi
 
 # Show the banner
@@ -159,14 +161,14 @@ tmux new-session -d -s "$session_name"
 # Function to start a tmux window
 start_tmux_window() {
   local session="$1"
-  local window_name=$2
-  local command=$3
+  local window_name="$2"
+  local command="$3"
   
-  tmux new-window -t "$session_name" -n "$window_name" || {
+  tmux new-window -t "$session" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
-  tmux send-keys -t "$session_name:$window_name" \
+  tmux send-keys -t "$session:$window_name" \
     "bash -lc $(printf '%q' "$command")" C-m
 }
 
