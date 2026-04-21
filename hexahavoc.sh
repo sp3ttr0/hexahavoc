@@ -171,7 +171,7 @@ start_tmux_window() {
   local window_name="$2"
   local command="$3"
   
-  tmux new-window -t "$session" -n "$window_name" || {
+  tmux new-window -t "${session}:" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
@@ -181,7 +181,8 @@ start_tmux_window() {
 
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
-start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" --domain "$target_domain" || {
+start_tmux_window "$session_name" "mitm6" \
+"mitm6 -i \"$interface\" -d \"$target_domain\"" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
@@ -215,6 +216,9 @@ if [ "$verbose" -eq 1 ]; then
 fi
 
 trap - EXIT
-tmux attach-session -t "$session_name"
+tmux attach-session -t "$session_name" || {
+  echo -e "${RED}Failed to attach to session${RESET}"
+  exit 1
+}
 
 exit 0
