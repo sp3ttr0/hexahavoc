@@ -187,8 +187,10 @@ start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_
 }
 
 sleep 2
-tmux list-panes -t "$session_name:mitm6" -F "#{pane_pid}" | xargs -r ps -p >/dev/null || {
-  echo -e "${RED}mitm6 process not running${RESET}"
+tmux list-panes -t "$session_name:mitm6" -F "#{pane_pid}" \
+| xargs -r ps -o cmd= -p \
+| grep -q "mitm6" || {
+  echo -e "${RED}mitm6 failed to start${RESET}"
   exit 1
 }
 
@@ -200,8 +202,10 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 
 }
 
 sleep 2
-tmux list-panes -t "$session_name:impacket-ntlmrelayx" -F "#{pane_pid}" | xargs -r ps -p >/dev/null || {
-  echo -e "${RED}ntlmrelayx process not running${RESET}"
+tmux list-panes -t "$session_name:impacket-ntlmrelayx" -F "#{pane_pid}" \
+| xargs -r ps -o cmd= -p \
+| grep -q "ntlmrelayx" || {
+  echo -e "${RED}ntlmrelayx failed to start${RESET}"
   exit 1
 }
 
