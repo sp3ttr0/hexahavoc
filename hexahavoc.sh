@@ -21,7 +21,6 @@ target_ip=""
 interface="eth0"
 verbose=0
 silent=0
-session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
 loot_dir="dumps"
 
 # Print usage information
@@ -74,8 +73,6 @@ check_command() {
   fi
 }
 
-log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
-
 # Enable verbose logging if requested
 if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
   echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
@@ -106,22 +103,14 @@ validate_ip() {
 
 validate_ip "$target_ip"
 
-# Check if target IP is reachable
-ping -c 1 -W 2 "$target_ip" &>/dev/null || {
-  echo -e "${RED}Error: Target IP is not reachable.${RESET}"
-  exit 1
-}
+session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
 
 ip link show "$interface" >/dev/null 2>&1 || {
   echo -e "${RED}Invalid interface: $interface${RESET}"
   exit 1
 }
 
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-check_command "tmux"
-check_command "mitm6"
-check_command "impacket-ntlmrelayx"
+
 
 cleanup() {
   local exit_code=$?
@@ -141,6 +130,8 @@ fi
 # Create loot directory if it doesn't exist
 mkdir -p "$loot_dir"
 
+log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
+
 # Suppress console output if silent mode is enabled
 if [[ "$silent" -eq 1 ]]; then
   exec >"$log_file" 2>&1
@@ -150,6 +141,12 @@ fi
 
 # Show the banner
 banner
+
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+for cmd in tmux mitm6 impacket-ntlmrelayx; do
+  check_command "$cmd"
+done
 
 # Check if tmux session exists
 if tmux has-session -t "$session_name" 2>/dev/null; then
@@ -164,7 +161,6 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
     [aA])
       echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
       tmux attach-session -t "$session_name"
-      trap - EXIT
       exit 0
       ;;
     [kK])
