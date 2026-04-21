@@ -211,11 +211,11 @@ cleanup() {
   local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
     echo -e "${YELLOW}Cleaning up session...${RESET}"
-    tmux kill-session -t "$session_name" 2>/dev/null || true
+    tmux has-session -t "$session_name" 2>/dev/null && \
+    tmux kill-session -t "$session_name"
   fi
 }
-
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
