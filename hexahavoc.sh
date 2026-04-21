@@ -210,17 +210,10 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" \
   exit 1
 }
 
-started=0
-for i in {1..5}; do
-  if pgrep -fa "impacket-ntlmrelayx" | grep -q "$target_ip"; then
-    started=1
-    break
-  fi
-  sleep 1
-done
+sleep 3
 
-[[ "$started" -eq 1 ]] || {
-  echo -e "${RED}ntlmrelayx failed to start${RESET}"
+tmux capture-pane -t "$session_name:impacket-ntlmrelayx" -p | grep -qi "Listening" || {
+  echo -e "${RED}ntlmrelayx did not reach listening state${RESET}"
   exit 1
 }
 
