@@ -144,16 +144,6 @@ fi
 # Show the banner
 banner
 
-cleanup() {
-  local exit_code=$?
-  if [[ $exit_code -ne 0 ]]; then
-    echo -e "${YELLOW}Cleaning up session...${RESET}"
-    tmux kill-session -t "$session_name" 2>/dev/null || true
-  fi
-}
-
-trap cleanup EXIT INT TERM
-
 # Create a new tmux session
 tmux has-session -t "$session_name" 2>/dev/null && {
   echo -e "${RED}Session already exists${RESET}"
@@ -216,6 +206,16 @@ tmux capture-pane -t "$session_name:impacket-ntlmrelayx" -p | grep -qi "Listenin
   echo -e "${RED}ntlmrelayx did not reach listening state${RESET}"
   exit 1
 }
+
+cleanup() {
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo -e "${YELLOW}Cleaning up session...${RESET}"
+    tmux kill-session -t "$session_name" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
