@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+IFS=$'\n\t'
 
 # ===============================================================
 # hexahavoc.sh - IPv6 DNS Takeover Automation Script
@@ -22,6 +23,7 @@ interface="eth0"
 verbose=0
 silent=0
 loot_dir="dumps"
+session_name=""
 
 # Print usage information
 usage() {
@@ -103,23 +105,12 @@ validate_ip() {
 
 validate_ip "$target_ip"
 
-session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
+
 
 ip link show "$interface" >/dev/null 2>&1 || {
   echo -e "${RED}Invalid interface: $interface${RESET}"
   exit 1
 }
-
-
-
-cleanup() {
-  local exit_code=$?
-  if [[ $exit_code -ne 0 ]]; then
-    echo -e "${YELLOW}Cleaning up session...${RESET}"
-    tmux kill-session -t "$session_name" 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT
 
 # Root privilege check
 if [ "$EUID" -ne 0 ]; then
@@ -127,10 +118,11 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
+log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
+
 # Create loot directory if it doesn't exist
 mkdir -p "$loot_dir"
-
-log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
 # Suppress console output if silent mode is enabled
 if [[ "$silent" -eq 1 ]]; then
@@ -147,6 +139,15 @@ echo -e "${CYAN}Checking dependencies...${RESET}"
 for cmd in tmux mitm6 impacket-ntlmrelayx; do
   check_command "$cmd"
 done
+
+cleanup() {
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo -e "${YELLOW}Cleaning up session...${RESET}"
+    tmux kill-session -t "$session_name" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 # Check if tmux session exists
 if tmux has-session -t "$session_name" 2>/dev/null; then
