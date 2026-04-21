@@ -21,17 +21,8 @@ target_ip=""
 interface="eth0"
 verbose=0
 silent=0
-session_name="ipv6_dns_takeover"
+session_name="ipv6_dns_takeover_${target_domain}_$(date +%H%M%S)"
 loot_dir="dumps"
-log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
-
-# Check if a command exists
-check_command() {
-  if ! command -v "$1" &> /dev/null; then
-    echo -e "${RED}Error: $1 is not installed. Please install it before running this script.${RESET}"
-    exit 1
-  fi
-}
 
 # Print usage information
 usage() {
@@ -75,13 +66,23 @@ while getopts ":d:t:i:l:vs" opt; do
   esac
 done
 
-[[ "$verbose" -eq 1 ]] && set -x
+# Check if a command exists
+check_command() {
+  if ! command -v "$1" &> /dev/null; then
+    echo -e "${RED}Error: '$1' not found in PATH${RESET}"
+    exit 1
+  fi
+}
 
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-check_command "tmux"
-check_command "mitm6"
-check_command "impacket-ntlmrelayx"
+log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
+
+# Enable verbose logging if requested
+if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
+  echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
+  exit 1
+fi
+
+[[ "$verbose" -eq 1 ]] && set -x
 
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
@@ -116,6 +117,12 @@ ip link show "$interface" >/dev/null 2>&1 || {
   exit 1
 }
 
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+check_command "tmux"
+check_command "mitm6"
+check_command "impacket-ntlmrelayx"
+
 cleanup() {
   local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
@@ -144,14 +151,8 @@ fi
 # Show the banner
 banner
 
-# Enable verbose logging if requested
-if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
-  echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
-  exit 1
-fi
-
 # Check if tmux session exists
-if tmux has-session -t -s "$session_name" 2>/dev/null; then
+if tmux has-session -t "$session_name" 2>/dev/null; then
   echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
 
   echo -e "${BLUE}Do you want to:${RESET}"
@@ -163,6 +164,7 @@ if tmux has-session -t -s "$session_name" 2>/dev/null; then
     [aA])
       echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
       tmux attach-session -t "$session_name"
+      trap - EXIT
       exit 0
       ;;
     [kK])
@@ -213,6 +215,7 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
 tmux attach-session -t "$session_name"
+trap - EXIT
 
 # Disable verbose logging
 if [ "$verbose" -eq 1 ]; then
