@@ -75,6 +75,12 @@ check_command() {
   fi
 }
 
+# Check dependencies
+echo -e "${CYAN}Checking dependencies...${RESET}"
+for cmd in tmux mitm6 impacket-ntlmrelayx; do
+  check_command "$cmd"
+done
+
 # Enable verbose logging if requested
 if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
   echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
@@ -90,7 +96,7 @@ if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
 fi
 
 # Validate target domain
-if ! [[ "$target_domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+if ! [[ "$target_domain" =~^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$ ]]; then
   echo -e "${RED}Error: Invalid domain format.${RESET}"
   exit 1
 fi
@@ -105,7 +111,10 @@ validate_ip() {
 
 validate_ip "$target_ip"
 
-
+ping -c1 -W2 "$target_ip" &>/dev/null || {
+  echo -e "${RED}Target not reachable${RESET}"
+  exit 1
+}
 
 ip link show "$interface" >/dev/null 2>&1 || {
   echo -e "${RED}Invalid interface: $interface${RESET}"
@@ -128,17 +137,11 @@ mkdir -p "$loot_dir"
 if [[ "$silent" -eq 1 ]]; then
   exec >"$log_file" 2>&1
 else
-  exec > >(tee -a "$log_file") 2>&1
+  log() { echo -e "$1"; }
 fi
 
 # Show the banner
 banner
-
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-for cmd in tmux mitm6 impacket-ntlmrelayx; do
-  check_command "$cmd"
-done
 
 cleanup() {
   local exit_code=$?
@@ -149,41 +152,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Check if tmux session exists
-if tmux has-session -t "$session_name" 2>/dev/null; then
-  echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
-
-  echo -e "${BLUE}Do you want to:${RESET}"
-  echo -e "  [a] Attach to existing session"
-  echo -e "  [k] Kill and restart session"
-  read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
-
-  case "$user_choice" in
-    [aA])
-      echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-      tmux attach-session -t "$session_name"
-      exit 0
-      ;;
-    [kK])
-      echo -e "${RED}[*] Killing existing tmux session...${RESET}"
-      tmux kill-session -t "$session_name"
-      echo -e "${GREEN}[*] Session killed. Exiting.${RESET}"
-      exit 0
-      ;;
-    *)
-      echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
-      exit 1
-      ;;
-  esac
-fi
-
 # Create a new tmux session
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
 tmux new-session -d -s "$session_name"
 
 # Function to start a tmux window
 start_tmux_window() {
-  local session_name=$1
+  local session="$1"
   local window_name=$2
   local command=$3
   
