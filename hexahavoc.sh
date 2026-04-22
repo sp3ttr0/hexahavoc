@@ -137,7 +137,7 @@ safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
 session_name="ipv6_dns_takeover_${safe_domain}_$(date +%H%M%S)"
 log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
 
-trap cleanup INT TERM EXIT
+trap cleanup INT TERM
 
 # Create loot directory if it doesn't exist
 mkdir -p "$loot_dir"
