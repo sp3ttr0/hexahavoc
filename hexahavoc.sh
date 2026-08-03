@@ -146,7 +146,7 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
   case "$user_choice" in
     [aA])
       echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-      tmux attach-session -t "$session_name"
+      tmux -CC attach-session -t "$session_name"
       exit 0
       ;;
     [kK])
@@ -226,7 +226,7 @@ pgrep -fa "ntlmrelayx.*$target_ip" | grep -vq "bash -lc" || {
 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
-tmux attach-session -t "$session_name" || {
+tmux -CC attach-session -t "$session_name" || {
   echo -e "${RED}Failed to attach to session${RESET}"
   exit 1
 }
