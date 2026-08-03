@@ -1,5 +1,6 @@
 #!/bin/bash
-
+set -euo pipefail
+IFS=$'\n\t'
 # ===============================================================
 # hexahavoc.sh - IPv6 DNS Takeover Automation Script
 # ---------------------------------------------------------------
@@ -152,7 +153,7 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
   case "$user_choice" in
     [aA])
       echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-      tmux -CC attach-session -t "$session_name"
+      tmux attach-session -t "$session_name"
       exit 0
       ;;
     [kK])
@@ -180,7 +181,7 @@ start_tmux_window() {
   local session_name=$1
   local window_name=$2
   local command=$3
-  tmux new-window -t "$session" -n "$window_name" || {
+  tmux new-window -t "$session_name" -n "$window_name" || {
     echo "Failed to create window"
     exit 1
   }
@@ -209,7 +210,7 @@ fi
 
 # Attach to the tmux session
 echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
-tmux -CC attach-session -t "$session_name" || {
+tmux attach-session -t "$session_name" || {
   echo -e "${RED}Failed to attach to session${RESET}"
   exit 1
 }
