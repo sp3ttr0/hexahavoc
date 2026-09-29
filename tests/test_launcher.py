@@ -6,6 +6,7 @@ import pty
 import shlex
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
@@ -13,7 +14,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'hexahavoc.sh'
 
 
 class LauncherTests(unittest.TestCase):
-    def run_launcher(self, args, failure='', system='Linux', interactive=True, timer_mode='', existing=False, log_tools=False):
+    def run_launcher(self, args, failure='', system='Linux', interactive=True, timer_mode='', existing=False, log_tools=False, sessions=()):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             mockbin = root / 'bin'
@@ -44,6 +45,10 @@ elif name == 'tmux':
     action = args[0]
     failure = os.environ.get('MOCK_FAILURE', '')
     active = pathlib.Path(os.environ['MOCK_LOG']).parent / 'active'
+    if action == 'list-sessions':
+        for index, session in enumerate(json.loads(os.environ['MOCK_SESSIONS'])):
+            print('$' + str(index + 7) + ' ' + session)
+        sys.exit(0)
     if action == 'has-session': sys.exit(0 if active.exists() else 1)
     if action == failure: sys.exit(1)
     if action == 'new-session':
@@ -76,18 +81,33 @@ elif name == 'tmux':
                 (mockbin / name).symlink_to(mock)
             env = dict(os.environ, PATH=str(mockbin) + os.pathsep + os.environ['PATH'],
                        MOCK_LOG=str(log), MOCK_FAILURE=failure, MOCK_SYSTEM=system,
-                       MOCK_TIMER_MODE=timer_mode, MOCK_LOG_TOOLS='1' if log_tools else '')
+                       MOCK_TIMER_MODE=timer_mode, MOCK_LOG_TOOLS='1' if log_tools else '',
+                       MOCK_SESSIONS=json.dumps(sessions))
             env.pop('TMUX', None)
             command = ['/bin/bash', str(script), *args]
             if interactive:
                 master, slave = pty.openpty()
+                def drain_terminal():
+                    try:
+                        while os.read(master, 4096):
+                            pass
+                    except OSError:
+                        pass
+                reader = threading.Thread(target=drain_terminal, daemon=True)
+                reader.start()
                 try:
                     process = subprocess.Popen(command, stdin=slave, stdout=slave,
                                                stderr=subprocess.PIPE, cwd=root, env=env)
-                    _, errors = process.communicate(timeout=10)
+                    try:
+                        _, errors = process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.communicate()
+                        raise
                     code = process.returncode
                 finally:
                     os.close(slave)
+                    reader.join(timeout=1)
                     os.close(master)
             else:
                 result = subprocess.run(command, capture_output=True, cwd=root, env=env, timeout=10)
@@ -98,6 +118,7 @@ elif name == 'tmux':
                     time.sleep(0.05)
                 self.assertFalse((root / 'active').exists(), 'Timer did not close the mock session')
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+            self.output_created = (root / 'dumps').exists()
             self.run_files = {str(p.relative_to(root)): p.read_text()
                               for p in root.rglob('*.log')}
             self.run_modes = {str(p.relative_to(root)): p.stat().st_mode & 0o777
@@ -231,6 +252,52 @@ elif name == 'tmux':
             self.assertEqual(result.returncode, 23)
             self.assertEqual(Path(path).read_text(), 'diagnostic\n')
             self.assertEqual(result.stdout, b'diagnostic\n')
+
+    def test_preflight_without_targets_is_read_only(self):
+        code, error, calls = self.run_launcher(['--check'], interactive=False)
+        self.assertEqual(code, 0, error)
+        self.assertFalse(self.output_created)
+        self.assertFalse(any(c[0] in ('tmux', 'mitm6', 'impacket-ntlmrelayx') for c in calls))
+
+    def test_preflight_validates_supplied_settings(self):
+        for settings in (['-t', 'not-an-ip'], ['-d', '-bad.example'], ['-l', 'launcher']):
+            with self.subTest(settings=settings):
+                code, _, calls = self.run_launcher(['--check', *settings], interactive=False)
+                self.assertNotEqual(code, 0)
+                self.assertFalse(self.output_created)
+                self.assertFalse(any(c[0] == 'tmux' for c in calls))
+
+    def test_session_controls_without_targets(self):
+        session = 'ipv6_dns_takeover_example_com'
+        for action in ('status', 'attach', 'stop'):
+            with self.subTest(action=action):
+                code, error, calls = self.run_launcher(['--' + action], sessions=[session])
+                self.assertEqual(code, 0, error)
+                self.assertFalse(self.output_created)
+                self.assertTrue(all(c[0] == 'tmux' for c in calls))
+                if action != 'status':
+                    expected = 'attach-session' if action == 'attach' else 'kill-session'
+                    self.assertIn(['tmux', expected, '-t', '$7'], calls)
+
+    def test_multiple_sessions_require_selection(self):
+        sessions = ['ipv6_dns_takeover_one_com', 'ipv6_dns_takeover_two_com', 'unrelated']
+        code, error, calls = self.run_launcher(['--stop'], sessions=sessions)
+        self.assertNotEqual(code, 0)
+        self.assertIn('Multiple sessions', error)
+        self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
+        code, error, calls = self.run_launcher(['--stop', '--session', sessions[1]], sessions=sessions)
+        self.assertEqual(code, 0, error)
+        self.assertIn(['tmux', 'kill-session', '-t', '$8'], calls)
+
+    def test_session_controls_reject_unrelated_sessions_and_conflicts(self):
+        for args in (['--attach'], ['--stop', '--session=unrelated'],
+                     ['--stop', '--check'], ['--status', '-d', 'example.com']):
+            with self.subTest(args=args):
+                code, _, calls = self.run_launcher(args, sessions=['unrelated'])
+                self.assertNotEqual(code, 0)
+                self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
+        code, error, _ = self.run_launcher(['--status'], sessions=['unrelated'], interactive=False)
+        self.assertEqual(code, 0, error)
 
 
 if __name__ == '__main__':

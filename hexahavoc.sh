@@ -15,12 +15,23 @@ keep_session=0
 duration=""
 deadline=0
 session_target=""
+mode=run
+selected_session=""
+run_options=0
 
 usage() {
   cat <<'HELP'
 Usage: hexahavoc.sh -d <domain> -t <IP> [-i <interface>] [-l <directory>] [--duration <seconds>] [-v | -s]
-  -d  Target domain (required)
-  -t  Literal IPv4 or IPv6 address (required)
+  hexahavoc.sh --status
+  hexahavoc.sh --attach|--stop [--session <name>]
+  hexahavoc.sh --check [-d <domain>] [-t <IP>] [-i <interface>] [-l <directory>]
+  --status   List running hexahavoc sessions
+  --attach   Attach to the only session, or select one with --session
+  --stop     Stop the only session, or select one with --session
+  --check    Validate local prerequisites/settings without starting tools
+  --session  Exact session name for --status, --attach, or --stop
+  -d  Target domain (required for a new run)
+  -t  Literal IPv4 or IPv6 address (required for a new run)
   -i  Network interface (default: eth0)
   -l  Parent directory for timestamped run folders (default: dumps)
   --duration  Stop the new session after this many seconds (positive integer)
@@ -51,15 +62,32 @@ trap 'exit 129' HUP
 
 while getopts ':d:t:i:l:vsh-:' opt; do
   case "$opt" in
-    d) target_domain=$OPTARG ;;
-    t) target_ip=$OPTARG ;;
-    i) interface=$OPTARG ;;
-    l) loot_dir=$OPTARG ;;
+    d) target_domain=$OPTARG; run_options=1 ;;
+    t) target_ip=$OPTARG; run_options=1 ;;
+    i) interface=$OPTARG; run_options=1 ;;
+    l) loot_dir=$OPTARG; run_options=1 ;;
     v) verbose=1 ;;
     s) silent=1 ;;
     h) usage; exit 0 ;;
     -)
       case "$OPTARG" in
+        status|attach|stop|check)
+          [[ "$mode" == run ]] || fail 'Choose only one action: --status, --attach, --stop, or --check.'
+          mode=$OPTARG
+          continue
+          ;;
+        session)
+          (( OPTIND <= $# )) || fail '--session requires a name.'
+          selected_session=${!OPTIND}
+          OPTIND=$((OPTIND + 1))
+          [[ -n "$selected_session" ]] || fail '--session requires a name.'
+          continue
+          ;;
+        session=*)
+          selected_session=${OPTARG#session=}
+          [[ -n "$selected_session" ]] || fail '--session requires a name.'
+          continue
+          ;;
         duration)
           (( OPTIND <= $# )) || fail '--duration requires a value.'
           duration=${!OPTIND}
@@ -78,16 +106,59 @@ done
 shift "$((OPTIND - 1))"
 (( $# == 0 )) || fail 'Unexpected positional arguments. Use -h for help.'
 (( verbose == 0 || silent == 0 )) || fail '-v and -s cannot be combined.'
-[[ -n "$target_domain" && -n "$target_ip" ]] || fail 'Both -d and -t are required.'
+# Session management does not require attack dependencies, targets, or output paths.
+if [[ "$mode" == status || "$mode" == attach || "$mode" == stop ]]; then
+  (( run_options == 0 )) && [[ -z "$duration" ]] || fail 'Session controls cannot be combined with run settings.'
+  command -v tmux >/dev/null 2>&1 || fail 'Required command not found: tmux'
+  (( EUID == 0 )) || fail 'Run this script as root.'
+  sessions=()
+  session_ids=()
+  listing=$(tmux list-sessions -F '#{session_id} #{session_name}' 2>/dev/null) || listing=""
+  while IFS=' ' read -r id name; do
+    [[ "$name" == ipv6_dns_takeover_* ]] || continue
+    [[ -z "$selected_session" || "$name" == "$selected_session" ]] || continue
+    sessions+=("$name")
+    session_ids+=("$id")
+  done <<< "$listing"
+  if [[ "$mode" == status ]]; then
+    if (( ${#sessions[@]} == 0 )); then
+      [[ -z "$selected_session" ]] || fail 'Requested hexahavoc session was not found.'
+      printf 'No running hexahavoc sessions.\n'
+    else
+      printf 'Running session: %s\n' "${sessions[@]}"
+    fi
+    exit 0
+  fi
+  (( ${#sessions[@]} > 0 )) || fail 'No matching hexahavoc session is running.'
+  if (( ${#sessions[@]} > 1 )); then
+    printf 'Available session: %s\n' "${sessions[@]}" >&2
+    fail 'Multiple sessions are running; specify --session <name>.'
+  fi
+  if [[ "$mode" == stop ]]; then
+    tmux kill-session -t "${session_ids[0]}"
+    log "Stopped ${sessions[0]}. Saved output is retained."
+  else
+    [[ -t 0 && -t 1 ]] || fail 'An interactive terminal is required to attach to tmux.'
+    [[ -z "${TMUX:-}" ]] || fail 'Run --attach outside tmux.'
+    tmux attach-session -t "${session_ids[0]}"
+  fi
+  exit 0
+fi
+[[ -z "$selected_session" ]] || fail '--session requires --status, --attach, or --stop.'
+if [[ "$mode" == run ]]; then
+  [[ -n "$target_domain" && -n "$target_ip" ]] || fail 'Both -d and -t are required.'
+fi
 [[ -n "$interface" && -n "$loot_dir" ]] || fail 'Interface and output directory cannot be empty.'
 
 # Reject malformed DNS labels, including leading/trailing hyphens.
+if [[ -n "$target_domain" ]]; then
 [[ ${#target_domain} -le 253 && "$target_domain" == *.* ]] || fail 'Invalid domain format.'
 [[ "$target_domain" != *. ]] || fail 'Use a domain without a trailing dot.'
 IFS='.' read -r -a labels <<< "$target_domain"
 for label in "${labels[@]}"; do
   [[ ${#label} -le 63 && "$label" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || fail 'Invalid domain label.'
 done
+fi
 
 [[ "$(uname -s)" == Linux ]] || fail 'This launcher requires Linux (macOS is not supported).'
 for cmd in tmux mitm6 impacket-ntlmrelayx ip python3 mkdir sleep date mktemp tee; do
@@ -96,6 +167,7 @@ done
 (( EUID == 0 )) || fail 'Run this script as root.'
 
 # Parse a literal address without DNS queries or an ICMP reachability gate.
+if [[ -n "$target_ip" ]]; then
 ip_version=$(python3 - "$target_ip" <<'PYIP'
 import ipaddress
 import sys
@@ -107,7 +179,32 @@ except ValueError:
     sys.exit(1)
 PYIP
 ) || fail 'Target must be a literal IPv4 or IPv6 address (without a zone ID).'
+fi
 ip link show dev "$interface" >/dev/null 2>&1 || fail "Interface not found: $interface"
+
+# Check output path feasibility without creating directories or files.
+python3 - "$loot_dir" <<'PYPATH'
+import os
+import pathlib
+import sys
+try:
+    path = pathlib.Path(sys.argv[1])
+    while not os.path.lexists(path):
+        path = path.parent
+    if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
+        raise ValueError('Output path must have a writable, searchable directory ancestor')
+except (OSError, ValueError) as error:
+    print(f'Error: {error}', file=sys.stderr)
+    sys.exit(1)
+PYPATH
+if [[ "$mode" == check ]]; then
+  log 'Preflight passed: dependencies, root privileges, interface, and output path checked.'
+  if [[ -z "$target_domain" || -z "$target_ip" ]]; then
+    log 'Target settings not fully supplied; provide -d and -t to validate both.'
+  fi
+  log 'No tools started or output created. Service reachability and relay success are not checked.'
+  exit 0
+fi
 
 if (( verbose == 1 )); then set -x; fi
 safe_domain="${target_domain//[^a-zA-Z0-9]/_}"

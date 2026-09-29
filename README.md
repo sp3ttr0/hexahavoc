@@ -23,9 +23,26 @@ sudo ./hexahavoc.sh -d example.com -t 192.168.1.10 -i eth0 --duration 60
 | `-i <interface>` | Network interface; default: `eth0`. |
 | `-l <folder>` | Output parent folder; default: `dumps/`. |
 | `--duration <seconds>` | Positive whole seconds before closing the new session; default: unlimited. |
+| `--check` | Check local prerequisites and supplied settings without starting a run. |
+| `--status` | List running hexahavoc sessions; no target arguments needed. |
+| `--attach` / `--stop` | Attach to or stop the only running session. |
+| `--session <name>` | Select an exact session for status, attach, or stop. Required if attaching/stopping with multiple sessions. |
 | `-v` | Trace launcher commands. |
 | `-s` | Hide launcher status messages; tool output and errors remain visible. Cannot combine with `-v`. |
 | `-h` | Show help. |
+
+## Preflight and session controls
+
+```bash
+sudo ./hexahavoc.sh --check -d example.com -t 192.168.1.10 -i eth0
+sudo ./hexahavoc.sh --status
+sudo ./hexahavoc.sh --attach
+sudo ./hexahavoc.sh --stop
+# Select one when multiple sessions are running:
+sudo ./hexahavoc.sh --stop --session ipv6_dns_takeover_example_com
+```
+
+`--check` also works without targets; it validates dependencies, privileges, the interface, and output path permissions without creating files. Supplied target settings are validated locally; reachability is not tested. Session controls require only tmux and root, cannot be combined with run settings, and leave saved logs intact. Attaching does not reset the duration timer. Status lists sessions, not tool health or assessment success.
 
 ## Output and sessions
 
