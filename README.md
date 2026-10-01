@@ -46,6 +46,8 @@ sudo ./hexahavoc.sh --stop --session ipv6_dns_takeover_example_com
 
 ## Output and sessions
 
+New runs display **mitm6 on the left** and **ntlmrelayx on the right** in one tmux window. Press **Ctrl+b**, then **o** to switch panes, or **Ctrl+b**, then **z** to zoom/restore a pane. Existing sessions retain their layout.
+
 Each run creates a timestamped folder such as `dumps/2026-09-29_14-30-00_a1B2c3/`, containing separate `mitm6.log` and `ntlmrelayx.log` files plus any files ntlmrelayx generates. Logs include output and errors, remain visible in tmux, and are retained even if the attempt fails. Their presence does not confirm success.
 
 Detaching leaves the tools running. With `--duration`, the session closes automatically even after detaching; leave its `duration` window open. The timer starts after session creation and applies only to new sessions. Without a duration, stop the session manually when finished.
