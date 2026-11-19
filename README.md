@@ -1,6 +1,6 @@
 # HexaHavoc
 
-HexaHavoc runs `mitm6` and Impacket's `ntlmrelayx` in tmux for authorized IPv6 DNS and NTLM relay testing. Use it only on networks you have permission to assess.
+HexaHavoc runs `mitm6` and Impacket's `ntlmrelayx` in tmux for authorized IPv6 DNS and NTLM relay testing.
 
 ## Requirements
 
@@ -26,3 +26,7 @@ python3 -B tests/tmux_smoke.py -v
 ```
 
 The smoke test requires tmux and uses an isolated server with inert commands. The tests can run without root privileges.
+
+## Disclaimer
+
+HexaHavoc is provided as is for authorized security testing and education. Use it only on systems and networks you own or have explicit permission to test. You are responsible for staying within the agreed scope and complying with applicable laws.
