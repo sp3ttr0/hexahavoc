@@ -9,7 +9,23 @@ HexaHavoc runs `mitm6` and Impacket's `ntlmrelayx` in tmux for authorized IPv6 D
 
 ## Usage
 
-Run `./hexahavoc.sh -h` for the available options. Use `--check` to validate local prerequisites and `--status`, `--attach`, or `--stop` to manage sessions created by the launcher. Use `--session <name>` to select a session. Older unmarked sessions must be managed directly in tmux.
+| Flag | Purpose |
+| --- | --- |
+| `-d <domain>` | Domain for a new run. Required. |
+| `-t <IP>` | Target IPv4 or IPv6 address for a new run. Required. |
+| `-i <interface>` | Network interface. Defaults to `eth0`. |
+| `-l <directory>` | Parent directory for saved output. Defaults to `dumps/`. |
+| `--duration <seconds>` | Set a shutdown deadline in positive whole seconds. |
+| `--check` | Validate local prerequisites and supplied settings without starting tools. |
+| `--status` | List running HexaHavoc sessions. |
+| `--attach` | Attach to a running HexaHavoc session. |
+| `--stop` | Stop a running HexaHavoc session and keep saved output. |
+| `--session <name>` | Select a session by exact name for status, attach, or stop. Required for attach or stop when multiple sessions exist. |
+| `-v` | Trace launcher commands. May expose arguments in terminal output. |
+| `-s` | Hide launcher status messages. Tool output and errors stay visible. Incompatible with `-v`. |
+| `-h` | Show built-in help with `./hexahavoc.sh -h`. |
+
+Older unmarked sessions must be managed directly in tmux.
 
 Detaching leaves the session running. With `--duration`, the session stops at the deadline or if the timer exits early or a window is removed.
 
