@@ -25,4 +25,4 @@ python3 -B -m unittest discover -s tests -v
 python3 -B tests/tmux_smoke.py -v
 ```
 
-The smoke test uses an isolated tmux server and inert commands.
+The smoke test requires tmux and uses an isolated server with inert commands. The tests can run without root privileges.
