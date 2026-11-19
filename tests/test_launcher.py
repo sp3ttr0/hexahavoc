@@ -46,8 +46,13 @@ elif name == 'tmux':
     failure = os.environ.get('MOCK_FAILURE', '')
     active = pathlib.Path(os.environ['MOCK_LOG']).parent / 'active'
     if action == 'list-sessions':
-        for index, session in enumerate(json.loads(os.environ['MOCK_SESSIONS'])):
-            print('$' + str(index + 7) + ' ' + session)
+        if failure in ('no-server', 'list-sessions'):
+            error = ('no server running on /tmp/mock' if failure == 'no-server'
+                     else 'error connecting to /tmp/mock (Permission denied)')
+            print(error, file=sys.stderr)
+            sys.exit(1)
+        for index, (session, owned) in enumerate(json.loads(os.environ['MOCK_SESSIONS'])):
+            print(f'${index + 7} {int(owned)} {session}')
         sys.exit(0)
     if action == 'has-session': sys.exit(0 if active.exists() else 1)
     if action == failure: sys.exit(1)
@@ -56,12 +61,13 @@ elif name == 'tmux':
         if os.environ.get('MOCK_LOG_TOOLS'):
             result = subprocess.run(['/bin/bash', '-c', args[-1]], capture_output=True)
             (active.parent / 'mitm_console').write_bytes(result.stdout)
-        print('%1')
+        print('$7 %1')
     if action == 'kill-session': active.unlink(missing_ok=True)
     if action in ('new-window', 'split-window'):
         if not active.exists(): sys.exit(1)
         if 'duration' in args:
             if failure == 'timer': sys.exit(1)
+            print('@1 %3')
             if os.environ.get('MOCK_TIMER_MODE'):
                 subprocess.Popen(['/bin/bash', '-c', args[-1]], stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -178,7 +184,7 @@ elif name == 'tmux':
         self.assertEqual(result.stdout.decode().split('\0')[:-1], args[1:])
 
     def test_failures_cleanup_owned_session(self):
-        for failure in ('split-window', 'dead', 'display-message', 'attach-session'):
+        for failure in ('split-window', 'dead', 'display-message', 'attach-session', 'set-option'):
             with self.subTest(failure=failure):
                 code, _, calls = self.run_launcher(['-d', 'example.com', '-t', '192.0.2.1'], failure=failure)
                 self.assertNotEqual(code, 0)
@@ -216,6 +222,19 @@ elif name == 'tmux':
             ['--duration', '10', '-d', 'example.com', '-t', '192.0.2.1'], failure='timer')
         self.assertNotEqual(code, 0)
         self.assertIn(['tmux', 'kill-session', '-t', '$7'], calls)
+
+    def test_timed_run_stops_if_shutdown_hook_cannot_be_installed(self):
+        code, _, calls = self.run_launcher(
+            ['--duration', '10', '-d', 'example.com', '-t', '192.0.2.1'], failure='set-hook')
+        self.assertNotEqual(code, 0)
+        self.assertIn(['tmux', 'kill-session', '-t', '$7'], calls)
+
+    def test_existing_unmarked_session_cannot_be_stopped_through_run_mode(self):
+        code, error, calls = self.run_launcher(
+            ['-d', 'example.com', '-t', '192.0.2.1'], existing=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn('already in use', error)
+        self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
 
     def test_existing_session_is_not_given_a_timer(self):
         code, error, calls = self.run_launcher(
@@ -280,7 +299,7 @@ elif name == 'tmux':
         session = 'ipv6_dns_takeover_example_com'
         for action in ('status', 'attach', 'stop'):
             with self.subTest(action=action):
-                code, error, calls = self.run_launcher(['--' + action], sessions=[session])
+                code, error, calls = self.run_launcher(['--' + action], sessions=[(session, True)])
                 self.assertEqual(code, 0, error)
                 self.assertFalse(self.output_created)
                 self.assertTrue(all(c[0] == 'tmux' for c in calls))
@@ -289,23 +308,39 @@ elif name == 'tmux':
                     self.assertIn(['tmux', expected, '-t', '$7'], calls)
 
     def test_multiple_sessions_require_selection(self):
-        sessions = ['ipv6_dns_takeover_one_com', 'ipv6_dns_takeover_two_com', 'unrelated']
+        sessions = [('ipv6_dns_takeover_one_com', True), ('ipv6_dns_takeover_two_com', True),
+                    ('unrelated', False)]
         code, error, calls = self.run_launcher(['--stop'], sessions=sessions)
         self.assertNotEqual(code, 0)
         self.assertIn('Multiple sessions', error)
         self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
-        code, error, calls = self.run_launcher(['--stop', '--session', sessions[1]], sessions=sessions)
+        code, error, calls = self.run_launcher(['--stop', '--session', sessions[1][0]], sessions=sessions)
         self.assertEqual(code, 0, error)
         self.assertIn(['tmux', 'kill-session', '-t', '$8'], calls)
+
+    def test_session_prefix_does_not_confer_ownership(self):
+        session = 'ipv6_dns_takeover_example_com'
+        code, error, calls = self.run_launcher(
+            ['--stop', '--session', session], sessions=[(session, False)])
+        self.assertNotEqual(code, 0)
+        self.assertIn('No matching', error)
+        self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
+
+    def test_session_listing_distinguishes_missing_server_from_errors(self):
+        code, error, _ = self.run_launcher(['--status'], failure='no-server')
+        self.assertEqual(code, 0, error)
+        code, error, _ = self.run_launcher(['--status'], failure='list-sessions')
+        self.assertNotEqual(code, 0)
+        self.assertIn('Permission denied', error)
 
     def test_session_controls_reject_unrelated_sessions_and_conflicts(self):
         for args in (['--attach'], ['--stop', '--session=unrelated'],
                      ['--stop', '--check'], ['--status', '-d', 'example.com']):
             with self.subTest(args=args):
-                code, _, calls = self.run_launcher(args, sessions=['unrelated'])
+                code, _, calls = self.run_launcher(args, sessions=[('unrelated', False)])
                 self.assertNotEqual(code, 0)
                 self.assertFalse(any(c[:2] == ['tmux', 'kill-session'] for c in calls))
-        code, error, _ = self.run_launcher(['--status'], sessions=['unrelated'], interactive=False)
+        code, error, _ = self.run_launcher(['--status'], sessions=[('unrelated', False)], interactive=False)
         self.assertEqual(code, 0, error)
 
 

