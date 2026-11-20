@@ -27,7 +27,7 @@ HexaHavoc runs `mitm6` and Impacket's `ntlmrelayx` in tmux for authorized IPv6 D
 
 Older unmarked sessions must be managed directly in tmux.
 
-Detaching leaves the session running. With `--duration`, the session stops at the deadline or if the timer exits early or a window is removed.
+Detaching leaves the session running. If either tool exits, the whole session closes and saved logs remain. With `--duration`, the session stops at the deadline or if the timer exits early or a window is removed.
 
 ## Output
 

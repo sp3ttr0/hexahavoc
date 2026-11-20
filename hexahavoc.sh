@@ -291,9 +291,9 @@ session_info=$(tmux new-session -d -P -F '#{session_id} #{pane_id}' -s "$session
 IFS=' ' read -r session_target mitm_pane <<< "$session_info"
 created_session=1
 tmux set-option -t "$session_target" @hexahavoc_owned 1
+shutdown_command="kill-session -t $session_target"
 if [[ -n "$duration" ]]; then
   deadline=$((SECONDS + duration))
-  shutdown_command="kill-session -t $session_target"
   # A closed timer window must stop the run even when no client is attached.
   tmux set-hook -t "$session_target" window-unlinked "$shutdown_command"
   # A session-owned timer survives client detach and is closed with the session.
@@ -320,6 +320,14 @@ relay_pane=$(tmux split-window -h -d -P -F '#{pane_id}' -t "$mitm_pane" "$relay_
   finish_if_expired
   fail 'Could not create the ntlmrelayx pane.'
 }
+
+# Stop the sibling tool when a logging pipeline exits. The run files are retained.
+for event in pane-exited pane-died; do
+  tmux set-hook -w -t "${session_target}:tools" "$event" "$shutdown_command" || {
+    finish_if_expired
+    fail 'Could not install the tool shutdown hook.'
+  }
+done
 
 # These are session-owned process liveness checks, not service readiness checks.
 for _ in 1 2 3; do

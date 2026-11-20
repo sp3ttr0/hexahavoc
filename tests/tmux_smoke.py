@@ -33,8 +33,8 @@ class TmuxSmokeTest(unittest.TestCase):
         stubs = {
             'uname': 'echo Linux',
             'ip': 'exit 0',
-            'mitm6': 'exec sleep 120',
-            'impacket-ntlmrelayx': 'exec sleep 120',
+            'mitm6': self.tool_stub('mitm6'),
+            'impacket-ntlmrelayx': self.tool_stub('ntlmrelayx'),
             'tmux': (
                 '# Simulate detaching at the client boundary.\n'
                 'if [ "$1" = attach-session ]; then exit 0; fi\n'
@@ -47,6 +47,15 @@ class TmuxSmokeTest(unittest.TestCase):
             path.chmod(0o700)
         self.env = dict(os.environ, PATH=f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
         self.env.pop('TMUX', None)
+
+    def tool_stub(self, name):
+        crash_file = shlex.quote(str(self.root / f'{name}.crash'))
+        return (
+            f'echo "{name} started"\n'
+            f'while [ ! -f {crash_file} ]; do sleep 0.1; done\n'
+            f'echo "{name} crashed" >&2\n'
+            'exit 1'
+        )
 
     def server(self, *args, check=True):
         return subprocess.run(
@@ -74,7 +83,7 @@ class TmuxSmokeTest(unittest.TestCase):
             if self.server('has-session', '-t', target, check=False).returncode:
                 return
             time.sleep(0.05)
-        self.fail(f'Timed session {target} stayed up')
+        self.fail(f'Session {target} stayed up')
 
     def test_deadline_and_timer_window_loss_stop_only_owned_session(self):
         self.launch('--status')
@@ -107,6 +116,32 @@ class TmuxSmokeTest(unittest.TestCase):
                     self.launch('--stop', '--session', 'ipv6_dns_takeover_example_test')
                 self.wait_for_shutdown(target)
                 self.server('has-session', '-t', unrelated)
+
+    def test_either_tool_crash_stops_untimed_session_and_preserves_logs(self):
+        unrelated = 'unrelated'
+        self.server('new-session', '-d', '-s', unrelated, 'sleep 120')
+        for tool in ('mitm6', 'ntlmrelayx'):
+            with self.subTest(tool=tool):
+                target = f'ipv6_dns_takeover_{tool}_test'
+                output = self.root / tool
+                self.launch('-s', '-d', f'{tool}.test', '-t', '192.0.2.1', '-l', str(output))
+                self.server('has-session', '-t', f'={target}')
+                # Exercise both automatic pane removal and a retained dead pane.
+                if tool == 'ntlmrelayx':
+                    self.server('set-option', '-w', '-t', f'{target}:tools', 'remain-on-exit', 'on')
+                trigger = self.root / f'{tool}.crash'
+                trigger.touch()
+                try:
+                    self.wait_for_shutdown(f'={target}')
+                finally:
+                    trigger.unlink()
+                self.server('has-session', '-t', f'={unrelated}')
+                run_dir, = output.iterdir()
+                for name in ('mitm6', 'ntlmrelayx'):
+                    contents = (run_dir / f'{name}.log').read_text()
+                    self.assertIn(f'{name} started', contents)
+                    if name == tool:
+                        self.assertIn(f'{name} crashed', contents)
 
 
 if __name__ == '__main__':
